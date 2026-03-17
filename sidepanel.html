@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voice AI Assistant</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+
+    <header class="header" role="banner">
+      <h1 class="title">Voice AI Assistant</h1>
+      <span id="status-badge" class="badge badge--idle" aria-live="polite" aria-atomic="true">
+        Idle
+      </span>
+    </header>
+
+    <main class="main" role="main">
+
+      <!-- ── Controls ───────────────────────────────────────────── -->
+      <section class="controls" aria-label="Listening controls">
+        <button id="btn-start" class="btn btn--primary" aria-label="Start listening">
+          <span class="btn-icon" aria-hidden="true">🎤</span>
+          Start Listening
+        </button>
+        <button id="btn-stop" class="btn btn--secondary" disabled aria-label="Stop listening">
+          <span class="btn-icon" aria-hidden="true">⏹</span>
+          Stop Listening
+        </button>
+        <p class="shortcut-hint">
+          Shortcut: <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>1</kbd>
+        </p>
+      </section>
+
+      <!-- ── Commands reference ─────────────────────────────────── -->
+      <section class="panel-section" aria-label="Available commands">
+        <button
+          id="btn-commands"
+          class="btn btn--ghost"
+          aria-expanded="false"
+          aria-controls="commands-panel"
+          aria-label="Show available voice commands"
+        >
+          <span class="btn-icon" aria-hidden="true">📋</span>
+          Voice Commands
+          <span class="chevron" aria-hidden="true">▾</span>
+        </button>
+
+        <div id="commands-panel" class="commands-panel" hidden>
+
+          <div class="cmd-group">
+            <h3 class="cmd-group-title">🗂 Tabs</h3>
+            <ul class="cmd-list">
+              <li><span class="cmd-say">"How many tabs are open"</span></li>
+              <li><span class="cmd-say">"List my tabs"</span></li>
+              <li><span class="cmd-say">"What page am I on"</span></li>
+              <li><span class="cmd-say">"Open new tab"</span></li>
+              <li><span class="cmd-say">"Close this tab"</span></li>
+              <li><span class="cmd-say">"Go to youtube.com"</span></li>
+              <li><span class="cmd-say">"Go to google.com"</span></li>
+              <li><span class="cmd-say">"Open github.com"</span></li>
+            </ul>
+          </div>
+
+          <div class="cmd-group">
+            <h3 class="cmd-group-title">📖 Page Reading</h3>
+            <ul class="cmd-list">
+              <li><span class="cmd-say">"Read this page"</span></li>
+              <li><span class="cmd-say">"Read aloud"</span></li>
+              <li><span class="cmd-say">"What's on this page"</span></li>
+              <li><span class="cmd-say">"List the links"</span></li>
+              <li><span class="cmd-say">"What are the links"</span></li>
+              <li><span class="cmd-say">"What's the title"</span></li>
+              <li><span class="cmd-say">"Summarize"</span></li>
+              <li><span class="cmd-say">"Give me a summary"</span></li>
+            </ul>
+          </div>
+
+          <div class="cmd-group">
+            <h3 class="cmd-group-title">🧭 Navigation</h3>
+            <ul class="cmd-list">
+              <li><span class="cmd-say">"Scroll down"</span></li>
+              <li><span class="cmd-say">"Scroll up"</span></li>
+              <li><span class="cmd-say">"Go back"</span></li>
+              <li><span class="cmd-say">"Go forward"</span></li>
+              <li><span class="cmd-say">"Previous page"</span></li>
+              <li><span class="cmd-say">"Next page"</span></li>
+              <li><span class="cmd-say">"Reload page"</span></li>
+              <li><span class="cmd-say">"Refresh"</span></li>
+            </ul>
+          </div>
+
+          <div class="cmd-group">
+            <h3 class="cmd-group-title">🕐 Time &amp; Date</h3>
+            <ul class="cmd-list">
+              <li><span class="cmd-say">"What time is it"</span></li>
+              <li><span class="cmd-say">"What's the date"</span></li>
+              <li><span class="cmd-say">"What day is it"</span></li>
+              <li><span class="cmd-say">"What's today"</span></li>
+            </ul>
+          </div>
+
+          <div class="cmd-group">
+            <h3 class="cmd-group-title">🧠 Memory</h3>
+            <ul class="cmd-list">
+              <li><span class="cmd-say">"Remember my name is [name]"</span></li>
+              <li><span class="cmd-say">"What's my name"</span></li>
+              <li><span class="cmd-say">"Do you know my name"</span></li>
+              <li><span class="cmd-say">"Forget everything"</span></li>
+            </ul>
+          </div>
+
+          <p class="cmd-footer">
+            Anything else is sent to AI (requires Gemini Nano).
+          </p>
+        </div>
+      </section>
+
+      <!-- ── Live transcript ────────────────────────────────────── -->
+      <section class="panel-section" aria-label="Voice transcript">
+        <h2 class="section-title">Transcript</h2>
+        <div
+          id="transcript"
+          class="scroll-box"
+          role="log"
+          aria-live="polite"
+          aria-atomic="false"
+          aria-label="Voice transcript log"
+        >
+          <p class="placeholder">Your voice commands will appear here…</p>
+        </div>
+      </section>
+
+      <!-- ── AI response ────────────────────────────────────────── -->
+      <section class="panel-section" aria-label="Assistant response">
+        <h2 class="section-title">Response</h2>
+        <div
+          id="response"
+          class="scroll-box"
+          role="status"
+          aria-live="polite"
+          aria-label="Assistant response"
+        >
+          <p class="placeholder">Assistant responses will appear here…</p>
+        </div>
+      </section>
+
+    </main>
+
+    <script src="sidepanel.js" type="module"></script>
+  </body>
+</html>

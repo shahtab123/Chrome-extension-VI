@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "Voice AI Assistant for the Blind",
+  "version": "0.1.0",
+  "description": "A voice-controlled AI assistant for visually impaired users, powered by Chrome built-in AI APIs.",
+
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "storage",
+    "sidePanel",
+    "tts"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+
+  "action": {
+    "default_title": "Open Voice Assistant",
+    "default_icon": {
+      "16": "images/icon-16.png",
+      "48": "images/icon-48.png",
+      "128": "images/icon-128.png"
+    }
+  },
+
+  "commands": {
+    "toggle-listening": {
+      "suggested_key": {
+        "default": "Alt+Shift+1"
+      },
+      "description": "Toggle voice listening on/off"
+    }
+  },
+
+  "icons": {
+    "16": "images/icon-16.png",
+    "48": "images/icon-48.png",
+    "128": "images/icon-128.png"
+  }
+}

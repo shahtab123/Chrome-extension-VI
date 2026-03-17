@@ -1,0 +1,238 @@
+/* ── Design tokens ─────────────────────────────────────────────────────────── */
+:root {
+  --bg:            #1a1a2e;
+  --surface:       #16213e;
+  --surface-2:     #0f3460;
+  --accent:        #e94560;
+  --accent-hover:  #c73652;
+  --text:          #eaeaea;
+  --text-muted:    #9090a8;
+  --success:       #4caf50;
+  --warning:       #ff9800;
+  --error:         #f44336;
+  --radius:        10px;
+  --gap:           16px;
+}
+
+/* ── Reset & base ──────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  padding: var(--gap);
+  min-height: 100vh;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--gap);
+  padding-bottom: var(--gap);
+  border-bottom: 1px solid var(--surface-2);
+}
+
+.title {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+/* ── Status badge ──────────────────────────────────────────────────────────── */
+.badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.badge--idle       { background: var(--surface-2); color: var(--text-muted); }
+.badge--listening  { background: var(--success);   color: #fff; }
+.badge--processing { background: var(--warning);   color: #fff; }
+.badge--error      { background: var(--error);     color: #fff; }
+
+/* ── Controls ──────────────────────────────────────────────────────────────── */
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: calc(var(--gap) * 1.25);
+}
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 13px 20px;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s, opacity 0.2s;
+}
+.btn:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn:disabled { opacity: 0.38; cursor: not-allowed; }
+
+.btn--primary { background: var(--accent);    color: #fff; }
+.btn--primary:hover:not(:disabled) { background: var(--accent-hover); }
+
+.btn--secondary { background: var(--surface-2); color: var(--text); }
+.btn--secondary:hover:not(:disabled) { background: #1c4f85; }
+
+.btn-icon { font-size: 1.1rem; }
+
+.shortcut-hint {
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--text-muted);
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-family: monospace;
+  background: var(--surface);
+}
+
+/* ── Panels ────────────────────────────────────────────────────────────────── */
+.panel-section { margin-bottom: calc(var(--gap) * 1.25); }
+
+.section-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.scroll-box {
+  background: var(--surface);
+  border: 1px solid var(--surface-2);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  min-height: 72px;
+  max-height: 180px;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 0.88rem;
+}
+
+/* ── Transcript entries ────────────────────────────────────────────────────── */
+.transcript-entry {
+  font-size: 0.93rem;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--surface-2);
+}
+.transcript-entry:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+
+.transcript-entry--interim {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Response ──────────────────────────────────────────────────────────────── */
+.response-text { font-size: 0.93rem; }
+
+/* ── Ghost / outline button variant ───────────────────────────────────────── */
+.btn--ghost {
+  background: transparent;
+  border: 1.5px solid var(--surface-2);
+  color: var(--text);
+  justify-content: space-between;
+  padding: 10px 14px;
+}
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: var(--text-muted);
+}
+.btn--ghost[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.chevron {
+  font-size: 0.85rem;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+.btn--ghost[aria-expanded="true"] .chevron {
+  transform: rotate(180deg);
+}
+
+/* ── Commands panel ────────────────────────────────────────────────────────── */
+.commands-panel {
+  margin-top: 8px;
+  background: var(--surface);
+  border: 1px solid var(--surface-2);
+  border-radius: var(--radius);
+  padding: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+.commands-panel[hidden] { display: none; }
+
+.cmd-group {
+  margin-bottom: 14px;
+}
+.cmd-group:last-of-type { margin-bottom: 8px; }
+
+.cmd-group-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--surface-2);
+}
+
+.cmd-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cmd-say {
+  display: inline-block;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  padding: 3px 9px;
+  border-radius: 6px;
+  cursor: default;
+  line-height: 1.5;
+}
+
+.cmd-footer {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--surface-2);
+}
