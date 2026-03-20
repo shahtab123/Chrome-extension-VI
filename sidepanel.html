@@ -3,149 +3,292 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Voice AI Assistant</title>
+    <title>Voice Assistant</title>
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
 
-    <header class="header" role="banner">
-      <h1 class="title">Voice AI Assistant</h1>
-      <span id="status-badge" class="badge badge--idle" aria-live="polite" aria-atomic="true">
-        Idle
-      </span>
-    </header>
+    <!-- ── Main view (default) ────────────────────────────────────── -->
+    <div id="view-main" class="view">
+      <header class="header" role="banner">
+        <div class="header-left">
+          <span class="header-dot" aria-hidden="true"></span>
+          <h1 class="header-title">Voice Assistant</h1>
+        </div>
+        <button id="btn-settings" class="icon-btn" aria-label="Open settings" title="Settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+      </header>
 
+    <!-- ── Main content ───────────────────────────────────────────── -->
     <main class="main" role="main">
 
-      <!-- ── Controls ───────────────────────────────────────────── -->
-      <section class="controls" aria-label="Listening controls">
-        <button id="btn-start" class="btn btn--primary" aria-label="Start listening">
-          <span class="btn-icon" aria-hidden="true">🎤</span>
-          Start Listening
-        </button>
-        <button id="btn-stop" class="btn btn--secondary" disabled aria-label="Stop listening">
-          <span class="btn-icon" aria-hidden="true">⏹</span>
-          Stop Listening
+      <!-- Mic hero: ring wraps button so pulse animates around it -->
+      <div class="mic-hero">
+        <div class="mic-ring" id="mic-ring" aria-hidden="true">
+          <button id="btn-start" class="btn-mic" aria-label="Start listening">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <line x1="8"  y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+        <p class="mic-label" id="mic-label">Tap to speak</p>
+        <button id="btn-stop" class="btn-stop" disabled aria-label="Stop listening">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+          Stop
         </button>
         <p class="shortcut-hint">
-          Shortcut: <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>1</kbd>
+          <kbd>Alt</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>1</kbd>
         </p>
-      </section>
+      </div>
 
-      <!-- ── Commands reference ─────────────────────────────────── -->
-      <section class="panel-section" aria-label="Available commands">
+      <!-- Status badge (listening/processing/error) -->
+      <div class="status-row" aria-live="polite" aria-atomic="true">
+        <span id="status-badge" class="status-badge status--idle"></span>
+      </div>
+
+      <!-- Commands reference -->
+      <div class="card" style="margin-bottom:12px">
         <button
           id="btn-commands"
-          class="btn btn--ghost"
+          class="card-toggle"
           aria-expanded="false"
           aria-controls="commands-panel"
-          aria-label="Show available voice commands"
+          aria-label="Toggle voice commands list"
         >
-          <span class="btn-icon" aria-hidden="true">📋</span>
-          Voice Commands
-          <span class="chevron" aria-hidden="true">▾</span>
+          <span class="card-toggle-label">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+            Commands
+          </span>
+          <svg class="chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
 
         <div id="commands-panel" class="commands-panel" hidden>
-
           <div class="cmd-group">
-            <h3 class="cmd-group-title">🗂 Tabs</h3>
+            <p class="cmd-group-title">Tabs</p>
             <ul class="cmd-list">
-              <li><span class="cmd-say">"How many tabs are open"</span></li>
-              <li><span class="cmd-say">"List my tabs"</span></li>
-              <li><span class="cmd-say">"What page am I on"</span></li>
-              <li><span class="cmd-say">"Open new tab"</span></li>
-              <li><span class="cmd-say">"Close this tab"</span></li>
-              <li><span class="cmd-say">"Go to youtube.com"</span></li>
-              <li><span class="cmd-say">"Go to google.com"</span></li>
-              <li><span class="cmd-say">"Open github.com"</span></li>
+              <li><span class="cmd-chip">"How many tabs are open"</span></li>
+              <li><span class="cmd-chip">"List my tabs"</span></li>
+              <li><span class="cmd-chip">"What page am I on"</span></li>
+              <li><span class="cmd-chip">"Open new tab"</span></li>
+              <li><span class="cmd-chip">"Close this tab"</span></li>
+              <li><span class="cmd-chip">"Go to youtube.com"</span></li>
             </ul>
           </div>
-
           <div class="cmd-group">
-            <h3 class="cmd-group-title">📖 Page Reading</h3>
+            <p class="cmd-group-title">Tab Productivity</p>
             <ul class="cmd-list">
-              <li><span class="cmd-say">"Read this page"</span></li>
-              <li><span class="cmd-say">"Read aloud"</span></li>
-              <li><span class="cmd-say">"What's on this page"</span></li>
-              <li><span class="cmd-say">"List the links"</span></li>
-              <li><span class="cmd-say">"What are the links"</span></li>
-              <li><span class="cmd-say">"What's the title"</span></li>
-              <li><span class="cmd-say">"Summarize"</span></li>
-              <li><span class="cmd-say">"Give me a summary"</span></li>
+              <li><span class="cmd-chip">"Go to tab 2"</span></li>
+              <li><span class="cmd-chip">"Next tab"</span></li>
+              <li><span class="cmd-chip">"Previous tab"</span></li>
+              <li><span class="cmd-chip">"Close all other tabs"</span></li>
+              <li><span class="cmd-chip">"Find tab with YouTube"</span></li>
             </ul>
           </div>
-
           <div class="cmd-group">
-            <h3 class="cmd-group-title">🧭 Navigation</h3>
+            <p class="cmd-group-title">Page Reading</p>
             <ul class="cmd-list">
-              <li><span class="cmd-say">"Scroll down"</span></li>
-              <li><span class="cmd-say">"Scroll up"</span></li>
-              <li><span class="cmd-say">"Go back"</span></li>
-              <li><span class="cmd-say">"Go forward"</span></li>
-              <li><span class="cmd-say">"Previous page"</span></li>
-              <li><span class="cmd-say">"Next page"</span></li>
-              <li><span class="cmd-say">"Reload page"</span></li>
-              <li><span class="cmd-say">"Refresh"</span></li>
+              <li><span class="cmd-chip">"Read this page"</span></li>
+              <li><span class="cmd-chip">"What's on this page"</span></li>
+              <li><span class="cmd-chip">"List the links"</span></li>
+              <li><span class="cmd-chip">"What's the title"</span></li>
+              <li><span class="cmd-chip">"Summarize"</span></li>
             </ul>
           </div>
-
           <div class="cmd-group">
-            <h3 class="cmd-group-title">🕐 Time &amp; Date</h3>
+            <p class="cmd-group-title">Page Interaction</p>
             <ul class="cmd-list">
-              <li><span class="cmd-say">"What time is it"</span></li>
-              <li><span class="cmd-say">"What's the date"</span></li>
-              <li><span class="cmd-say">"What day is it"</span></li>
-              <li><span class="cmd-say">"What's today"</span></li>
+              <li><span class="cmd-chip">"Type hello"</span></li>
+              <li><span class="cmd-chip">"Search for cats"</span></li>
+              <li><span class="cmd-chip">"Search YouTube for music"</span></li>
+              <li><span class="cmd-chip">"Click Sign in"</span></li>
+              <li><span class="cmd-chip">"Press enter"</span></li>
+              <li><span class="cmd-chip">"Focus search"</span></li>
+              <li><span class="cmd-chip">"Clear input"</span></li>
             </ul>
           </div>
-
           <div class="cmd-group">
-            <h3 class="cmd-group-title">🧠 Memory</h3>
+            <p class="cmd-group-title">Video Browsing</p>
             <ul class="cmd-list">
-              <li><span class="cmd-say">"Remember my name is [name]"</span></li>
-              <li><span class="cmd-say">"What's my name"</span></li>
-              <li><span class="cmd-say">"Do you know my name"</span></li>
-              <li><span class="cmd-say">"Forget everything"</span></li>
+              <li><span class="cmd-chip">"List videos"</span></li>
+              <li><span class="cmd-chip">"Next" (hear more)</span></li>
+              <li><span class="cmd-chip">"Play number 1"</span></li>
+              <li><span class="cmd-chip">"Play the first video"</span></li>
             </ul>
           </div>
-
-          <p class="cmd-footer">
-            Anything else is sent to AI (requires Gemini Nano).
-          </p>
+          <div class="cmd-group">
+            <p class="cmd-group-title">YouTube Player</p>
+            <ul class="cmd-list">
+              <li><span class="cmd-chip">"Play" / "Pause"</span></li>
+              <li><span class="cmd-chip">"Mute" / "Unmute"</span></li>
+              <li><span class="cmd-chip">"Volume up" / "Volume down"</span></li>
+              <li><span class="cmd-chip">"Fullscreen"</span></li>
+              <li><span class="cmd-chip">"Captions"</span></li>
+              <li><span class="cmd-chip">"Miniplayer"</span></li>
+              <li><span class="cmd-chip">"Speed up video" / "Slow down video"</span></li>
+            </ul>
+          </div>
+          <div class="cmd-group">
+            <p class="cmd-group-title">YouTube Seek</p>
+            <ul class="cmd-list">
+              <li><span class="cmd-chip">"Start from beginning"</span></li>
+              <li><span class="cmd-chip">"Rewind" (10s) / "Fast forward" (10s)</span></li>
+              <li><span class="cmd-chip">"Skip back" (5s) / "Skip ahead" (5s)</span></li>
+              <li><span class="cmd-chip">"Jump to 50%"</span></li>
+              <li><span class="cmd-chip">"Next video" / "Previous video"</span></li>
+            </ul>
+          </div>
+          <div class="cmd-group">
+            <p class="cmd-group-title">YouTube Navigate</p>
+            <ul class="cmd-list">
+              <li><span class="cmd-chip">"Trending" / "Subscriptions"</span></li>
+              <li><span class="cmd-chip">"Watch history" / "Liked videos"</span></li>
+              <li><span class="cmd-chip">"Shorts" / "Watch later"</span></li>
+              <li><span class="cmd-chip">"YouTube home"</span></li>
+              <li><span class="cmd-chip">"YouTube search"</span></li>
+            </ul>
+          </div>
+          <div class="cmd-group">
+            <p class="cmd-group-title">Navigation</p>
+            <ul class="cmd-list">
+              <li><span class="cmd-chip">"Scroll down / up"</span></li>
+              <li><span class="cmd-chip">"Go back / forward"</span></li>
+              <li><span class="cmd-chip">"Reload page"</span></li>
+            </ul>
+          </div>
+          <div class="cmd-group">
+            <p class="cmd-group-title">Read Controls</p>
+            <ul class="cmd-list">
+              <li><span class="cmd-chip">"Pause reading"</span></li>
+              <li><span class="cmd-chip">"Resume reading"</span></li>
+              <li><span class="cmd-chip">"Stop reading"</span></li>
+              <li><span class="cmd-chip">"Read slower"</span></li>
+              <li><span class="cmd-chip">"Read faster"</span></li>
+              <li><span class="cmd-chip">"Repeat that"</span></li>
+            </ul>
+          </div>
+          <div class="cmd-group">
+            <p class="cmd-group-title">Accessibility</p>
+            <ul class="cmd-list">
+              <li><span class="cmd-chip">"Toggle high contrast"</span></li>
+              <li><span class="cmd-chip">"Increase text size"</span></li>
+              <li><span class="cmd-chip">"Show focus highlight"</span></li>
+            </ul>
+          </div>
+          <div class="cmd-group">
+            <p class="cmd-group-title">Time &amp; Info</p>
+            <ul class="cmd-list">
+              <li><span class="cmd-chip">"What time is it"</span></li>
+              <li><span class="cmd-chip">"What's the date"</span></li>
+            </ul>
+          </div>
+          <div class="cmd-group">
+            <p class="cmd-group-title">Memory &amp; Profile</p>
+            <ul class="cmd-list">
+              <li><span class="cmd-chip">"Remember my name is [name]"</span></li>
+              <li><span class="cmd-chip">"What's my name"</span></li>
+              <li><span class="cmd-chip">"What do you know about me"</span></li>
+              <li><span class="cmd-chip">"Remember this page"</span></li>
+              <li><span class="cmd-chip">"Show saved pages"</span></li>
+              <li><span class="cmd-chip">"What did I ask before"</span></li>
+              <li><span class="cmd-chip">"Show history"</span></li>
+              <li><span class="cmd-chip">"Read last response"</span></li>
+              <li><span class="cmd-chip">"Forget everything"</span></li>
+              <li><span class="cmd-chip">"Forget about me"</span></li>
+            </ul>
+          </div>
+          <p class="cmd-footer">Anything else → Gemini AI</p>
         </div>
-      </section>
+      </div>
 
-      <!-- ── Live transcript ────────────────────────────────────── -->
-      <section class="panel-section" aria-label="Voice transcript">
-        <h2 class="section-title">Transcript</h2>
+      <!-- Transcript -->
+      <div class="card" style="margin-bottom:12px">
+        <p class="card-label">You said</p>
         <div
           id="transcript"
-          class="scroll-box"
+          class="card-body"
           role="log"
           aria-live="polite"
           aria-atomic="false"
-          aria-label="Voice transcript log"
+          aria-label="Voice transcript"
         >
-          <p class="placeholder">Your voice commands will appear here…</p>
+          <p class="s-empty">Your words will appear here…</p>
         </div>
-      </section>
+      </div>
 
-      <!-- ── AI response ────────────────────────────────────────── -->
-      <section class="panel-section" aria-label="Assistant response">
-        <h2 class="section-title">Response</h2>
+      <!-- Response -->
+      <div class="card">
+        <p class="card-label">Response</p>
         <div
           id="response"
-          class="scroll-box"
+          class="card-body"
           role="status"
           aria-live="polite"
           aria-label="Assistant response"
         >
-          <p class="placeholder">Assistant responses will appear here…</p>
+          <p class="s-empty">Assistant replies will appear here…</p>
         </div>
-      </section>
+      </div>
 
     </main>
+    </div>
+    <!-- end view-main -->
+
+    <!-- ── Settings view (full screen with back) ────────────────────── -->
+    <div id="view-settings" class="view view--settings" hidden role="region" aria-label="Settings">
+      <header class="header header--with-back" role="banner">
+        <button id="btn-settings-back" class="icon-btn icon-btn--back" aria-label="Back to Voice Assistant" title="Back">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <h1 class="header-title">Settings</h1>
+        <span class="header-spacer" aria-hidden="true"></span>
+      </header>
+      <div id="settings-panel" class="settings-panel" role="region" aria-label="Settings content">
+        <div class="s-section">
+          <p class="s-label">AI Status</p>
+          <div class="ai-status-row" aria-live="polite">
+            <span id="ai-status-dot" class="ai-dot ai-dot--none"></span>
+            <span id="ai-status-text" class="ai-status-text">Checking…</span>
+          </div>
+          <p class="s-hint">Priority: Chrome Built-in AI → Gemini API</p>
+        </div>
+        <div class="s-divider"></div>
+        <div class="s-section">
+          <p class="s-label">Saved Keys</p>
+          <div id="keys-list" class="keys-list" role="list" aria-label="Saved API keys" aria-live="polite">
+            <p class="s-empty" id="keys-empty">No keys saved yet.</p>
+          </div>
+        </div>
+        <div class="s-divider"></div>
+        <div class="s-section">
+          <p class="s-label">Add Key</p>
+          <p class="s-hint">
+            Free · 1,500 req/day ·
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" class="s-link">aistudio.google.com ↗</a>
+          </p>
+          <input type="text"     id="input-key-label" class="s-input" placeholder="Label (e.g. Personal)"   autocomplete="off" />
+          <div class="s-key-row">
+            <input type="password" id="input-api-key"   class="s-input" placeholder="Paste API key"           autocomplete="off" spellcheck="false" aria-label="API key value" />
+            <button id="btn-toggle-key" class="icon-btn" title="Show / hide" aria-label="Toggle visibility">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <div class="s-btn-row">
+            <button id="btn-save-key"     class="s-btn s-btn--fill">Add Key</button>
+            <button id="btn-test-new-key" class="s-btn s-btn--outline">Test</button>
+          </div>
+          <p id="key-feedback" class="s-feedback" aria-live="polite"></p>
+        </div>
+      </div>
+    </div>
 
     <script src="sidepanel.js" type="module"></script>
   </body>

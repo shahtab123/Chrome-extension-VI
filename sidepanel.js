@@ -1,30 +1,60 @@
 // sidepanel.js — Side Panel UI logic (ES module)
 import SpeechRecognitionWrapper from './voice/speechRecognition.js';
 import { speak, stopSpeaking } from './voice/speechSynthesis.js';
-import { handleCommand } from './ai/promptHandler.js';
+import { handleCommand, getActiveAIMode } from './ai/promptHandler.js';
+import {
+  getAllKeys, addKey, removeKey, setActiveKey,
+  getActiveKeyId, testApiKey, callGemini, maskKey,
+} from './ai/geminiApi.js';
+import { processTurn, cleanupOldHistory } from './ai/memory.js';
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
-const btnStart      = document.getElementById('btn-start');
-const btnStop       = document.getElementById('btn-stop');
-const statusBadge   = document.getElementById('status-badge');
-const transcriptEl  = document.getElementById('transcript');
-const responseEl    = document.getElementById('response');
-const btnCommands   = document.getElementById('btn-commands');
-const commandsPanel = document.getElementById('commands-panel');
+const btnStart        = document.getElementById('btn-start');
+const btnStop         = document.getElementById('btn-stop');
+const statusBadge     = document.getElementById('status-badge');
+const micLabel        = document.getElementById('mic-label');
+const micRing         = document.getElementById('mic-ring');
+const transcriptEl    = document.getElementById('transcript');
+const responseEl      = document.getElementById('response');
+const btnCommands     = document.getElementById('btn-commands');
+const commandsPanel   = document.getElementById('commands-panel');
+// Views
+const viewMain     = document.getElementById('view-main');
+const viewSettings = document.getElementById('view-settings');
+const btnSettings  = document.getElementById('btn-settings');
+const btnSettingsBack = document.getElementById('btn-settings-back');
+const aiStatusDot     = document.getElementById('ai-status-dot');
+const aiStatusText    = document.getElementById('ai-status-text');
+const keysList        = document.getElementById('keys-list');
+const keysEmpty       = document.getElementById('keys-empty');
+const inputKeyLabel   = document.getElementById('input-key-label');
+const inputApiKey     = document.getElementById('input-api-key');
+const btnToggleKey    = document.getElementById('btn-toggle-key');
+const btnSaveKey      = document.getElementById('btn-save-key');
+const btnTestNewKey   = document.getElementById('btn-test-new-key');
+const keyFeedback     = document.getElementById('key-feedback');
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let recognizer = null;
+let listeningRequested = false;
 
-// ─── Status badge ─────────────────────────────────────────────────────────────
+// ─── Status badge + mic state ────────────────────────────────────────────────
+const STATUS_LABELS = { idle: '', listening: 'Listening', processing: 'Processing', error: 'Error' };
+const MIC_LABELS    = { idle: 'Tap to speak', listening: 'Listening…', processing: 'Processing…', error: 'Something went wrong' };
+
 function setStatus(state) {
-  statusBadge.textContent = state.charAt(0).toUpperCase() + state.slice(1);
-  statusBadge.className   = `badge badge--${state}`;
+  statusBadge.textContent = STATUS_LABELS[state] ?? state;
+  statusBadge.className   = `status-badge status--${state}`;
+  micLabel.textContent    = MIC_LABELS[state] ?? state;
+
+  // Mic button visual state
+  btnStart.classList.toggle('btn-mic--listening', state === 'listening');
+  micRing.classList.toggle('mic-ring--active',    state === 'listening');
 }
 
 // ─── Transcript ───────────────────────────────────────────────────────────────
 function addTranscript(text, isInterim = false) {
-  // Remove empty-state placeholder
-  transcriptEl.querySelector('.placeholder')?.remove();
+  transcriptEl.querySelector('.s-empty')?.remove();
 
   if (isInterim) {
     let el = transcriptEl.querySelector('.transcript-entry--interim');
@@ -46,7 +76,10 @@ function addTranscript(text, isInterim = false) {
 
 // ─── Response box ─────────────────────────────────────────────────────────────
 function showResponse(text) {
-  responseEl.innerHTML = `<p class="response-text">${text}</p>`;
+  responseEl.innerHTML = `<p class="response-text">${escHtmlPanel(text)}</p>`;
+}
+function escHtmlPanel(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 // ─── Listening control ────────────────────────────────────────────────────────
@@ -62,9 +95,17 @@ function startListening() {
         setStatus('processing');
 
         try {
-          const response = await handleCommand(text);
+          const result = await handleCommand(text);
+          const response = typeof result === 'string' ? result : (result?.text ?? '');
+          const skipSpeak = Boolean(result && typeof result === 'object' && result.skipSpeak);
+
           showResponse(response);
-          await speak(response);
+          await processTurn(text, response);
+
+          if (!skipSpeak && response) {
+            const { ttsRate = 1.0 } = await chrome.storage.local.get('ttsRate');
+            await speak(response, { rate: ttsRate });
+          }
           setStatus('listening');
         } catch (err) {
           showResponse(`Error: ${err.message}`);
@@ -73,14 +114,29 @@ function startListening() {
       },
 
       onError(errCode) {
+        // 'no-speech' fires after silence — Chrome always follows it with onEnd
+        // which will auto-restart if listeningRequested is true, so ignore it here.
+        // 'aborted' means we called stop() ourselves — also safe to ignore.
+        if (errCode === 'no-speech' || errCode === 'aborted') return;
+
+        // Any real error (not-allowed, network, audio-capture, etc.) — stop fully.
         showResponse(`Recognition error: ${errCode}`);
         setStatus('error');
+        listeningRequested = false;
         setListeningUI(false);
       },
 
       onEnd() {
-        // Auto-reset unless we explicitly set a terminal state
-        if (!['error', 'idle'].includes(statusBadge.dataset.state)) {
+        // SpeechRecognition may end after short silence even in `continuous` mode.
+        // If the user is still "listening", we immediately restart.
+        if (listeningRequested) {
+          setListeningUI(true);
+          try {
+            recognizer.start();
+          } catch {
+            // Some browsers throw if start() happens too quickly; next onend will recover.
+          }
+        } else {
           setListeningUI(false);
         }
       },
@@ -88,11 +144,13 @@ function startListening() {
   }
 
   recognizer.start();
+  listeningRequested = true;
   setListeningUI(true);
   chrome.runtime.sendMessage({ type: 'SET_LISTENING_STATE', isListening: true });
 }
 
 function stopListening() {
+  listeningRequested = false;
   recognizer?.stop();
   stopSpeaking();
   setListeningUI(false);
@@ -114,6 +172,160 @@ btnCommands.addEventListener('click', () => {
   commandsPanel.hidden = isOpen;
   btnCommands.setAttribute('aria-expanded', String(!isOpen));
 });
+
+// ─── View switching: Main ↔ Settings ───────────────────────────────────────────
+function showMainView() {
+  viewMain.hidden = false;
+  viewSettings.hidden = true;
+  btnSettings.setAttribute('aria-expanded', 'false');
+}
+
+function showSettingsView() {
+  viewMain.hidden = true;
+  viewSettings.hidden = false;
+  btnSettings.setAttribute('aria-expanded', 'true');
+  refreshSettings();
+}
+
+btnSettings.addEventListener('click', showSettingsView);
+btnSettingsBack.addEventListener('click', showMainView);
+
+// Show/hide key value while typing
+btnToggleKey.addEventListener('click', () => {
+  const isPassword = inputApiKey.type === 'password';
+  inputApiKey.type = isPassword ? 'text' : 'password';
+  btnToggleKey.textContent = isPassword ? '🙈' : '👁';
+});
+
+// Add new key
+btnSaveKey.addEventListener('click', async () => {
+  const value = inputApiKey.value.trim();
+  const label = inputKeyLabel.value.trim();
+  if (!value) { setKeyFeedback('Paste an API key first.', 'error'); return; }
+
+  btnSaveKey.disabled = true;
+  await addKey(label, value);
+  inputApiKey.value     = '';
+  inputKeyLabel.value   = '';
+  inputApiKey.type      = 'password';
+  btnToggleKey.textContent = '👁';
+  await refreshSettings();
+  setKeyFeedback('✓ Key added.', 'ok');
+  btnSaveKey.disabled = false;
+});
+
+// Test the key currently typed in the input (before saving)
+btnTestNewKey.addEventListener('click', async () => {
+  const value = inputApiKey.value.trim();
+  if (!value) { setKeyFeedback('Paste a key to test it first.', 'error'); return; }
+  setKeyFeedback('Testing…', 'info');
+  btnTestNewKey.disabled = true;
+  try {
+    // Temporarily test by calling the API directly with this key
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${value}`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: 'Reply with the single word: ready' }] }],
+        }),
+      }
+    );
+    if (res.ok) setKeyFeedback('✓ Key is valid and working.', 'ok');
+    else {
+      const err = await res.json().catch(() => ({}));
+      setKeyFeedback(`✗ ${err?.error?.message ?? `HTTP ${res.status}`}`, 'error');
+    }
+  } catch (e) {
+    setKeyFeedback(`✗ ${e.message}`, 'error');
+  }
+  btnTestNewKey.disabled = false;
+});
+
+function setKeyFeedback(msg, type = 'info') {
+  keyFeedback.textContent = msg;
+  keyFeedback.className   = `s-feedback s-feedback--${type}`;
+}
+
+// ─── Keys list renderer ───────────────────────────────────────────────────────
+
+async function renderKeysList() {
+  const keys        = await getAllKeys();
+  const activeId    = await getActiveKeyId();
+
+  // Clear existing key items (keep the empty placeholder)
+  keysList.querySelectorAll('.key-item').forEach((el) => el.remove());
+
+  if (!keys.length) {
+    keysEmpty.hidden = false;
+    return;
+  }
+  keysEmpty.hidden = true;
+
+  keys.forEach((k) => {
+    const isActive = k.id === activeId || (!activeId && keys[0]?.id === k.id);
+
+    const item = document.createElement('div');
+    item.className  = `key-item${isActive ? ' key-item--active' : ''}`;
+    item.setAttribute('role', 'listitem');
+    item.dataset.id = k.id;
+
+    item.innerHTML = `
+      <span class="key-active-dot" aria-hidden="true"></span>
+      <div class="key-info">
+        <span class="key-label">${escHtml(k.label)}</span>
+        <span class="key-masked">${maskKey(k.value)}</span>
+      </div>
+      <div class="key-actions">
+        ${isActive
+          ? `<span class="key-btn key-btn--active-label" aria-label="Active key">Active</span>`
+          : `<button class="key-btn key-btn--activate" data-action="activate" data-id="${k.id}" aria-label="Set ${escHtml(k.label)} as active key">Set Active</button>`
+        }
+        <button class="key-btn key-btn--remove" data-action="remove" data-id="${k.id}" aria-label="Remove ${escHtml(k.label)}">Remove</button>
+      </div>`;
+
+    keysList.appendChild(item);
+  });
+
+  // Delegate click events
+  keysList.onclick = async (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const { action, id } = btn.dataset;
+
+    if (action === 'activate') {
+      await setActiveKey(id);
+      await refreshSettings();
+    } else if (action === 'remove') {
+      await removeKey(id);
+      await refreshSettings();
+      setKeyFeedback('Key removed.', 'info');
+    }
+  };
+}
+
+function escHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ─── AI status indicator ──────────────────────────────────────────────────────
+
+async function refreshSettings() {
+  await renderKeysList();
+  const mode = await getActiveAIMode();
+  const labels = {
+    'built-in':   '✓ Chrome Built-in AI (on-device)',
+    'gemini-api': '✓ Gemini API — key active',
+    'none':       '✗ No AI configured',
+  };
+  aiStatusDot.className    = `ai-dot ai-dot--${mode}`;
+  aiStatusText.textContent = labels[mode] ?? 'Unknown';
+}
+
+// Initialise on load
+cleanupOldHistory();
+refreshSettings();
 
 // ─── Keyboard shortcut relay from background ──────────────────────────────────
 chrome.runtime.onMessage.addListener((message) => {
