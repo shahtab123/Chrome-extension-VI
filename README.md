@@ -75,6 +75,38 @@ Click the extension icon in the toolbar. The side panel opens on the right.
 ### 4. Keyboard shortcut
 Default: **Alt+Shift+1** toggles listening. To change it: `chrome://extensions/shortcuts` → find the extension → set **Toggle voice listening on/off**.
 
+### 5. Google OAuth setup (Gmail now, Drive/Docs/Calendar ready)
+
+Use this once so Google account features work in production.
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) and create/select your project.
+2. Enable APIs:
+   - **Gmail API** (required now)
+   - **Google Drive API** (future)
+   - **Google Docs API** (future)
+   - **Google Calendar API** (future)
+3. Configure **OAuth consent screen** (External app), fill app info, and add scopes.
+4. Create **OAuth client ID** of type **Chrome Extension** and use your extension ID from `chrome://extensions`.
+5. Put the generated client ID into `manifest.json` under `oauth2.client_id`.
+
+Recommended OAuth scopes:
+
+- Gmail (current):  
+  - `https://www.googleapis.com/auth/gmail.readonly`  
+  - `https://www.googleapis.com/auth/gmail.send`  
+  - `https://www.googleapis.com/auth/gmail.modify`
+- Drive/Docs (future):  
+  - `https://www.googleapis.com/auth/drive.readonly`  
+  - `https://www.googleapis.com/auth/drive.file`  
+  - `https://www.googleapis.com/auth/documents.readonly`
+- Calendar (future):  
+  - `https://www.googleapis.com/auth/calendar.readonly`  
+  - `https://www.googleapis.com/auth/calendar.events`
+
+Sign-in behavior:
+- First use opens a Google sign-in/consent popup.
+- After approval, token is cached by Chrome; users do not need to sign in each time.
+
 ---
 
 ## How it works
@@ -246,10 +278,11 @@ More phrasing is supported (e.g. "What site is this", "Which page am I on"). Ope
 ## Tech stack
 
 - **Extension**: Manifest V3, side panel, background service worker (module), content script
-- **Permissions**: `tabs`, `activeTab`, `scripting`, `storage`, `sidePanel`, `tts`, `host_permissions` for `generativelanguage.googleapis.com`
+- **Permissions**: `tabs`, `activeTab`, `scripting`, `storage`, `sidePanel`, `tts`, `identity`, host permissions for `generativelanguage.googleapis.com` and `googleapis.com`
 - **Voice**: Web Speech API (SpeechRecognition in side panel; mic permission when you start listening)
 - **AI**: Chrome Prompt API (optional), Gemini 2.5 Flash via REST API
-- **Storage**: `chrome.storage.local` for API keys, user profile, session history, and preferences
+- **Google auth/data**: `chrome.identity` OAuth2 flow for Gmail (and future Drive/Docs/Calendar)
+- **Storage**: `chrome.storage.local` for API keys, user profile, session history, preferences, and cached Gmail state
 
 ---
 

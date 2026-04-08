@@ -8,8 +8,24 @@
 //
 // Falls back gracefully when a layer is unavailable.
 
-import { callGemini, getApiKey } from './geminiApi.js';
+import { callGemini, getApiKey, draftEmailWithAI } from './geminiApi.js';
 import { getUserProfile, getSessionHistory, addProfileFact } from './memory.js';
+import {
+  getAuthToken, removeCachedToken, isGmailConnected,
+  listUnread, listMessages, getMessage, replyToMessage,
+  sendEmail, markAsRead, markAsUnread, archiveMessage, trashMessage,
+  starMessage, unstarMessage, markImportant, markNotImportant,
+  getUnreadCount, listMessageIds, extractName,
+} from '../browser/gmail.js';
+
+function isGmailAuthError(err) {
+  const m = err.message ?? '';
+  return m.includes('not granted') || m.includes('OAuth2') || m.includes('No auth') ||
+         m.includes('interaction required') || m.includes('Authorization') || m.includes('sign in');
+}
+
+const GMAIL_SIGNIN_MSG =
+  'A Google sign-in window has opened. Please complete sign-in — you will only need to do this once.';
 
 let aiSession = null;
 
@@ -344,6 +360,494 @@ async function tryChromAPIQuery(lower) {
     const { lastResponse } = await chrome.storage.local.get('lastResponse');
     if (!lastResponse) return 'I do not have a previous response yet.';
     return lastResponse;
+  }
+
+  // ── Gmail ──────────────────────────────────────────────────────────────
+  // Every email command auto-triggers sign-in on first use — no "connect gmail" step needed.
+
+  // Helper: require an open email, returns id or a spoken error string
+  async function requireOpenEmail() {
+    const { gmailCurrentId } = await chrome.storage.local.get('gmailCurrentId');
+    if (!gmailCurrentId) return { error: 'No email is open right now. Say "check my email" first, then "read email 1".' };
+    return { id: gmailCurrentId };
+  }
+
+  // Helper: format an email list for speech
+  function formatEmailList(emails, offset = 0) {
+    return emails.map((e, i) => {
+      const sender = extractName(e.from);
+      const unread = e.isUnread ? ' (unread)' : '';
+      return `${offset + i + 1}: From ${sender}, subject: ${e.subject}${unread}`;
+    }).join('. ');
+  }
+
+  // Helper: save email list to storage for read/next commands
+  async function storeEmailList(emails, query, offset) {
+    await chrome.storage.local.set({
+      gmailList: emails.map((e) => ({ id: e.id, from: e.from, subject: e.subject, snippet: e.snippet, isUnread: e.isUnread })),
+      gmailListQuery: query,
+      gmailListOffset: offset,
+    });
+  }
+
+  // ── "Open Gmail" / "Go to Gmail" — opens gmail.com OR checks email ────
+  if (
+    (any(lower, 'open gmail', 'open my gmail', 'go to gmail', 'open my email', 'open email',
+               'open my mail', 'go to my email', 'go to my mail', 'go to email',
+               'take me to gmail', 'take me to email', 'take me to my email',
+               'launch gmail', 'open inbox', 'open my inbox', 'go to inbox'))
+  ) {
+    try {
+      const count = await getUnreadCount();
+      if (count > 0) {
+        const emails = await listUnread(5);
+        await storeEmailList(emails, 'in:inbox is:unread', 0);
+        const list = formatEmailList(emails);
+        const more = count > 5 ? ` Say "more emails" to hear the next batch.` : '';
+        return `You have ${count} unread email${count === 1 ? '' : 's'}. Here are the first ${emails.length}: ${list}. Say "read email" followed by the number.${more}`;
+      }
+      return 'Your inbox is clear — no unread emails. Say "show all email" to browse older messages.';
+    } catch (err) {
+      if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+      return `Could not open Gmail: ${err.message}`;
+    }
+  }
+
+  // ── Connect / Disconnect (still available but not required) ────────────
+  if (any(lower, 'connect gmail', 'sign in to gmail', 'login to gmail', 'link gmail', 'connect my email', 'connect email', 'sign in to email', 'login to email')) {
+    try {
+      await getAuthToken(true);
+      return 'Gmail connected. You can now say "check my email".';
+    } catch (err) {
+      return `Could not connect Gmail: ${err.message}. Make sure you are signed in to Chrome.`;
+    }
+  }
+
+  if (any(lower, 'disconnect gmail', 'sign out of gmail', 'unlink gmail', 'disconnect email', 'sign out of email', 'remove gmail')) {
+    try {
+      const token = await getAuthToken(false);
+      if (token) await removeCachedToken(token);
+      return 'Gmail disconnected. A sign-in window will open automatically next time you use an email command.';
+    } catch { return 'Gmail is already disconnected.'; }
+  }
+
+  if (any(lower, 'gmail status', 'is gmail connected', 'email status', 'is email connected')) {
+    const connected = await isGmailConnected();
+    return connected ? 'Gmail is connected and ready.' : 'Gmail is not connected yet. Just say "check my email" and sign-in will open automatically.';
+  }
+
+  // ── How many unread / total ───────────────────────────────────────────
+  if (
+    any(lower, 'how many unread', 'how many new email', 'how many emails', 'how many email',
+               'how many mail', 'unread count', 'email count', 'count my email', 'count my mail',
+               'do i have any email', 'do i have any mail', 'do i have new email', 'do i have new mail',
+               'any unread', 'any new email', 'any new mail', 'any emails')
+  ) {
+    try {
+      const count = await getUnreadCount();
+      return count === 0
+        ? 'You have no unread emails.'
+        : `You have ${count} unread email${count === 1 ? '' : 's'}. Say "check my email" to hear them.`;
+    } catch (err) {
+      if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+      return `Could not check: ${err.message}`;
+    }
+  }
+
+  // ── Check inbox / read emails (paginated, 5 at a time) ───────────────
+  if (
+    any(lower, 'check my email', 'check email', 'check my mail', 'read my email', 'read my mail',
+               'unread email', 'unread mail', 'new emails', 'new mail',
+               'check inbox', 'read inbox', 'show inbox', 'show my email', 'show my mail',
+               'what emails do i have', 'show all email', 'show all mail', 'list email', 'list my email',
+               'list my mail', 'read all email', 'show emails', 'show mail', 'my emails', 'my mail',
+               'what is in my inbox', "what's in my inbox", 'inbox')
+  ) {
+    try {
+      const wantUnread = any(lower, 'unread', 'new');
+      const query = wantUnread ? 'in:inbox is:unread' : 'in:inbox';
+      const emails = wantUnread ? await listUnread(5) : await listMessages(5, query);
+      if (!emails.length) return wantUnread ? 'You have no unread emails.' : 'Your inbox is empty.';
+
+      await storeEmailList(emails, query, 0);
+      const list = formatEmailList(emails);
+      const more = emails.length >= 5 ? ' Say "more emails" to hear the next batch.' : '';
+      return `${emails.length} email${emails.length === 1 ? '' : 's'}. ${list}. Say "read email" followed by the number.${more}`;
+    } catch (err) {
+      if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+      return `Could not check email: ${err.message}`;
+    }
+  }
+
+  // ── More emails / next emails / continue (pagination) ─────────────────
+  if (
+    any(lower, 'more email', 'more emails', 'more mail', 'next email', 'next emails', 'next mail',
+               'continue reading email', 'continue email', 'show more email', 'show more emails',
+               'show more mail', 'load more email', 'other email', 'other emails', 'remaining email',
+               'keep reading email', 'next batch', 'read more email', 'read more emails') ||
+    (any(lower, 'more', 'next', 'continue') && any(lower, 'email', 'mail', 'inbox', 'message'))
+  ) {
+    try {
+      const { gmailListQuery = 'in:inbox', gmailListOffset = 0 } =
+        await chrome.storage.local.get(['gmailListQuery', 'gmailListOffset']);
+      const newOffset = gmailListOffset + 5;
+      const emails = await listMessages(5, `${gmailListQuery}`);
+      // Fetch a larger batch to get the next page
+      const allEmails = await listMessages(newOffset + 5, gmailListQuery);
+      const page = allEmails.slice(newOffset, newOffset + 5);
+
+      if (!page.length) return 'No more emails to show. Say "check my email" to start over.';
+
+      await storeEmailList(page, gmailListQuery, newOffset);
+      const list = formatEmailList(page, newOffset);
+      const more = page.length >= 5 ? ' Say "more emails" for the next batch.' : ' That is all.';
+      return `${list}.${more}`;
+    } catch (err) {
+      if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+      return `Could not load more emails: ${err.message}`;
+    }
+  }
+
+  // ── Read specific email by number ─────────────────────────────────────
+  {
+    const emailWordNums = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+    const emailOrdinals = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10 };
+    let emailNum = null;
+
+    // "read email 1", "open email 3", "show message 2", "email number 5"
+    const emailDigitMatch = lower.match(/(?:read|open|show|get|check|view)\s+(?:the\s+)?(?:email|mail|message)\s+(?:number\s+)?(\d{1,2})/);
+    if (emailDigitMatch) emailNum = parseInt(emailDigitMatch[1], 10);
+
+    // "email 3", "mail 2" (bare)
+    if (emailNum === null) {
+      const bareEmailMatch = lower.match(/^(?:email|mail|message)\s+(\d{1,2})$/);
+      if (bareEmailMatch) emailNum = parseInt(bareEmailMatch[1], 10);
+    }
+
+    // "read the first email", "open the second one"
+    if (emailNum === null) {
+      const ordMatch = lower.match(/(?:read|open|show|get|check|view)\s+(?:the\s+)?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s*(?:email|mail|message|one)?/);
+      if (ordMatch) emailNum = emailOrdinals[ordMatch[1]];
+    }
+
+    // "read email one", "open mail two"
+    if (emailNum === null) {
+      const wordMatch = lower.match(/(?:read|open|show|get|check|view)\s+(?:the\s+)?(?:email|mail|message)\s+(?:number\s+)?(one|two|three|four|five|six|seven|eight|nine|ten)/);
+      if (wordMatch) emailNum = emailWordNums[wordMatch[1]];
+    }
+
+    if (emailNum !== null && emailNum >= 1) {
+      try {
+        const { gmailList = [], gmailListOffset = 0 } = await chrome.storage.local.get(['gmailList', 'gmailListOffset']);
+        if (!gmailList.length) return 'No email list loaded. Say "check my email" first.';
+        const localIdx = emailNum - gmailListOffset - 1;
+        if (localIdx < 0 || localIdx >= gmailList.length) {
+          return `I only have emails ${gmailListOffset + 1} through ${gmailListOffset + gmailList.length} loaded. Say a number in that range, or say "more emails" first.`;
+        }
+
+        const email = await getMessage(gmailList[localIdx].id);
+        await markAsRead(email.id);
+        await chrome.storage.local.set({ gmailCurrentId: email.id, gmailCurrentIdx: emailNum });
+
+        const sender = extractName(email.from);
+        const body = email.body.slice(0, 1500) || email.snippet;
+        return `Email from ${sender}. Subject: ${email.subject}. Date: ${email.date}. ${body}. You can say: reply, next email, delete, archive, mark important, or star this email.`;
+      } catch (err) {
+        if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+        return `Could not read email: ${err.message}`;
+      }
+    }
+  }
+
+  // ── Read next / previous email in list ────────────────────────────────
+  if (
+    any(lower, 'next email', 'read next email', 'read next', 'next message', 'next mail',
+               'show next email', 'open next email', 'read the next email', 'read the next one',
+               'go to next email', 'skip email', 'skip this email', 'skip to next')
+  ) {
+    try {
+      const { gmailList = [], gmailCurrentIdx = 0, gmailListOffset = 0 } =
+        await chrome.storage.local.get(['gmailList', 'gmailCurrentIdx', 'gmailListOffset']);
+      const nextNum = gmailCurrentIdx + 1;
+      const localIdx = nextNum - gmailListOffset - 1;
+      if (localIdx < 0 || localIdx >= gmailList.length) {
+        return 'No more emails in the current list. Say "more emails" to load the next batch.';
+      }
+      const email = await getMessage(gmailList[localIdx].id);
+      await markAsRead(email.id);
+      await chrome.storage.local.set({ gmailCurrentId: email.id, gmailCurrentIdx: nextNum });
+      const sender = extractName(email.from);
+      const body = email.body.slice(0, 1500) || email.snippet;
+      return `Email ${nextNum}. From ${sender}. Subject: ${email.subject}. ${body}. Say reply, next email, delete, archive, or mark important.`;
+    } catch (err) {
+      if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+      return `Could not read next email: ${err.message}`;
+    }
+  }
+
+  if (
+    any(lower, 'previous email', 'read previous email', 'previous message', 'previous mail',
+               'go back to email', 'last email', 'read last email', 'read the previous email',
+               'read the previous one', 'back to email', 'go back email')
+  ) {
+    try {
+      const { gmailList = [], gmailCurrentIdx = 0, gmailListOffset = 0 } =
+        await chrome.storage.local.get(['gmailList', 'gmailCurrentIdx', 'gmailListOffset']);
+      const prevNum = gmailCurrentIdx - 1;
+      const localIdx = prevNum - gmailListOffset - 1;
+      if (localIdx < 0 || prevNum < 1) return 'You are at the first email.';
+      if (localIdx >= gmailList.length) return 'Email not in current list.';
+      const email = await getMessage(gmailList[localIdx].id);
+      await chrome.storage.local.set({ gmailCurrentId: email.id, gmailCurrentIdx: prevNum });
+      const sender = extractName(email.from);
+      const body = email.body.slice(0, 1500) || email.snippet;
+      return `Email ${prevNum}. From ${sender}. Subject: ${email.subject}. ${body}. Say reply, next email, delete, archive, or mark important.`;
+    } catch (err) {
+      if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+      return `Could not read previous email: ${err.message}`;
+    }
+  }
+
+  // ── Go back to inbox / email list ─────────────────────────────────────
+  if (
+    any(lower, 'go back to inbox', 'back to inbox', 'go to inbox', 'show inbox again',
+               'back to email', 'back to my email', 'email list', 'back to email list',
+               'go back to email', 'go back to mail', 'back to mail')
+  ) {
+    try {
+      const { gmailList = [], gmailListOffset = 0 } = await chrome.storage.local.get(['gmailList', 'gmailListOffset']);
+      if (!gmailList.length) return 'No email list loaded. Say "check my email".';
+      const list = formatEmailList(gmailList, gmailListOffset);
+      await chrome.storage.local.remove(['gmailCurrentId', 'gmailCurrentIdx']);
+      return `Back to your email list. ${list}. Say "read email" followed by the number.`;
+    } catch (err) {
+      return `Could not go back: ${err.message}`;
+    }
+  }
+
+  // ── Reply (AI-composed) ────────────────────────────────────────────────
+  {
+    const replyMatch = lower.match(/(?:reply|respond|write back|answer|reply to (?:this |the )?(?:email|mail|message)?)\s*(?:saying\s+|with\s+|that\s+)?(.+)/);
+    if (replyMatch) {
+      const intent = replyMatch[1].trim();
+      if (intent) {
+        try {
+          const cur = await requireOpenEmail();
+          if (cur.error) return cur.error;
+
+          const original = await getMessage(cur.id);
+          const { userName = '' } = await chrome.storage.local.get('userName');
+
+          const draft = await draftEmailWithAI({ intent, originalEmail: original, userName });
+          const finalBody = draft?.body || intent;
+
+          await replyToMessage(cur.id, finalBody);
+          return `Reply sent. Here is what I wrote: ${finalBody}`;
+        } catch (err) {
+          return `Could not send reply: ${err.message}`;
+        }
+      }
+    }
+  }
+
+  // ── Compose / Send (AI-composed) ────────────────────────────────────
+  {
+    const composeMatch = lower.match(/(?:send|compose|write|draft)\s+(?:an?\s+)?(?:email|mail|message)\s+to\s+([\w.+\-]+@[\w.\-]+)\s*(?:saying|about|with|subject|body|message)?\s*(.*)?/);
+    if (composeMatch) {
+      const to = composeMatch[1].trim();
+      const intent = (composeMatch[2] || '').trim();
+      if (to) {
+        try {
+          if (!intent) return `What would you like to say? Say: send email to ${to} saying your message.`;
+
+          const { userName = '' } = await chrome.storage.local.get('userName');
+          const draft = await draftEmailWithAI({ intent, recipientAddress: to, userName });
+
+          const subject = draft?.subject || 'Message from Voice Assistant';
+          const body = draft?.body || intent;
+
+          await sendEmail({ to, subject, body });
+          return `Email sent to ${to}. Here is what I wrote: ${body}`;
+        } catch (err) {
+          return `Could not send email: ${err.message}`;
+        }
+      }
+    }
+  }
+
+  // ── Archive ───────────────────────────────────────────────────────────
+  if (
+    any(lower, 'archive email', 'archive this email', 'archive this', 'archive mail',
+               'archive the email', 'archive this message', 'archive it', 'move to archive')
+  ) {
+    try {
+      const cur = await requireOpenEmail();
+      if (cur.error) return cur.error;
+      await archiveMessage(cur.id);
+      await chrome.storage.local.remove(['gmailCurrentId', 'gmailCurrentIdx']);
+      return 'Email archived. Say "next email" to continue or "check my email" for a fresh list.';
+    } catch (err) { return `Could not archive: ${err.message}`; }
+  }
+
+  // ── Delete / Trash ────────────────────────────────────────────────────
+  if (
+    any(lower, 'delete email', 'delete this email', 'trash email', 'trash this email',
+               'delete this', 'delete mail', 'trash this', 'delete this message',
+               'throw away email', 'throw away this email', 'remove email', 'remove this email',
+               'trash it', 'delete it', 'get rid of this email')
+  ) {
+    try {
+      const cur = await requireOpenEmail();
+      if (cur.error) return cur.error;
+      await trashMessage(cur.id);
+      await chrome.storage.local.remove(['gmailCurrentId', 'gmailCurrentIdx']);
+      return 'Email moved to trash. Say "next email" to continue.';
+    } catch (err) { return `Could not delete: ${err.message}`; }
+  }
+
+  // ── Mark as important / not important ─────────────────────────────────
+  if (
+    any(lower, 'mark important', 'mark as important', 'mark email important', 'mark this important',
+               'mark this email as important', 'important email', 'make important', 'set important',
+               'flag this', 'flag email', 'flag this email', 'mark it important')
+  ) {
+    try {
+      const cur = await requireOpenEmail();
+      if (cur.error) return cur.error;
+      await markImportant(cur.id);
+      return 'Marked as important.';
+    } catch (err) { return `Could not mark important: ${err.message}`; }
+  }
+
+  if (
+    any(lower, 'remove important', 'unmark important', 'mark not important', 'mark as not important',
+               'unflag', 'unflag email', 'unflag this', 'remove flag', 'mark it not important')
+  ) {
+    try {
+      const cur = await requireOpenEmail();
+      if (cur.error) return cur.error;
+      await markNotImportant(cur.id);
+      return 'Removed important label.';
+    } catch (err) { return `Could not update: ${err.message}`; }
+  }
+
+  // ── Star / Unstar ─────────────────────────────────────────────────────
+  if (
+    any(lower, 'star email', 'star this email', 'star this', 'star it',
+               'add star', 'mark star', 'star this message', 'save for later')
+  ) {
+    try {
+      const cur = await requireOpenEmail();
+      if (cur.error) return cur.error;
+      await starMessage(cur.id);
+      return 'Email starred.';
+    } catch (err) { return `Could not star: ${err.message}`; }
+  }
+
+  if (
+    any(lower, 'unstar email', 'unstar this', 'unstar it', 'remove star', 'unstar this email')
+  ) {
+    try {
+      const cur = await requireOpenEmail();
+      if (cur.error) return cur.error;
+      await unstarMessage(cur.id);
+      return 'Star removed.';
+    } catch (err) { return `Could not unstar: ${err.message}`; }
+  }
+
+  // ── Mark read / unread ────────────────────────────────────────────────
+  if (
+    any(lower, 'mark as read', 'mark read', 'mark email read', 'mark this read', 'mark it read',
+               'mark this email as read')
+  ) {
+    try {
+      const cur = await requireOpenEmail();
+      if (cur.error) return cur.error;
+      await markAsRead(cur.id);
+      return 'Marked as read.';
+    } catch (err) { return `Could not mark read: ${err.message}`; }
+  }
+
+  if (
+    any(lower, 'mark as unread', 'mark unread', 'mark email unread', 'mark this unread', 'mark it unread',
+               'mark this email as unread', 'keep as unread', 'keep unread')
+  ) {
+    try {
+      const cur = await requireOpenEmail();
+      if (cur.error) return cur.error;
+      await markAsUnread(cur.id);
+      return 'Marked as unread.';
+    } catch (err) { return `Could not mark unread: ${err.message}`; }
+  }
+
+  // ── Show starred / important / sent emails ────────────────────────────
+  if (any(lower, 'starred email', 'show starred', 'my starred', 'starred mail', 'show my starred', 'read starred')) {
+    try {
+      const emails = await listMessages(5, 'is:starred');
+      if (!emails.length) return 'You have no starred emails.';
+      await storeEmailList(emails, 'is:starred', 0);
+      return `${emails.length} starred email${emails.length === 1 ? '' : 's'}. ${formatEmailList(emails)}. Say "read email" followed by the number.`;
+    } catch (err) {
+      if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+      return `Could not load starred: ${err.message}`;
+    }
+  }
+
+  if (any(lower, 'important email', 'show important', 'my important', 'important mail', 'show my important', 'read important')) {
+    try {
+      const emails = await listMessages(5, 'is:important');
+      if (!emails.length) return 'You have no important emails.';
+      await storeEmailList(emails, 'is:important', 0);
+      return `${emails.length} important email${emails.length === 1 ? '' : 's'}. ${formatEmailList(emails)}. Say "read email" followed by the number.`;
+    } catch (err) {
+      if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+      return `Could not load important: ${err.message}`;
+    }
+  }
+
+  if (any(lower, 'sent email', 'show sent', 'my sent', 'sent mail', 'show my sent', 'read sent', 'sent messages')) {
+    try {
+      const emails = await listMessages(5, 'in:sent');
+      if (!emails.length) return 'You have no sent emails.';
+      await storeEmailList(emails, 'in:sent', 0);
+      return `${emails.length} sent email${emails.length === 1 ? '' : 's'}. ${formatEmailList(emails)}. Say "read email" followed by the number.`;
+    } catch (err) {
+      if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+      return `Could not load sent: ${err.message}`;
+    }
+  }
+
+  // ── Search email ──────────────────────────────────────────────────────
+  {
+    const emailSearchMatch = lower.match(/(?:search|find|look for)\s+(?:my\s+)?(?:email|mail|inbox|gmail|messages?)\s+(?:for\s+|about\s+|from\s+|with\s+)?(.+)/);
+    if (emailSearchMatch) {
+      const query = emailSearchMatch[1].trim();
+      if (query) {
+        try {
+          const emails = await listMessages(5, query);
+          if (!emails.length) return `No emails found for "${query}".`;
+          await storeEmailList(emails, query, 0);
+          const list = formatEmailList(emails);
+          return `Found ${emails.length} email${emails.length === 1 ? '' : 's'} matching "${query}". ${list}. Say "read email" followed by the number.`;
+        } catch (err) {
+          if (isGmailAuthError(err)) return GMAIL_SIGNIN_MSG;
+          return `Could not search: ${err.message}`;
+        }
+      }
+    }
+  }
+
+  // ── "Who sent this" / "Who is this from" — about the open email ─────
+  if (
+    any(lower, 'who sent this', 'who is this from', 'who sent this email', 'who is the sender',
+               'who emailed me', 'who wrote this', 'sender')
+  ) {
+    const cur = await requireOpenEmail();
+    if (cur.error) return cur.error;
+    try {
+      const email = await getMessage(cur.id);
+      return `This email is from ${email.from}. Subject: ${email.subject}.`;
+    } catch (err) { return `Could not get sender: ${err.message}`; }
   }
 
   // ── Page interaction: type / search / click ────────────────────────────

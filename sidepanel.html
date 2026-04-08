@@ -155,6 +155,31 @@
             </ul>
           </div>
           <div class="cmd-group">
+            <p class="cmd-group-title">Gmail — Read</p>
+            <ul class="cmd-list">
+              <li><span class="cmd-chip">"Open Gmail" / "Check my email"</span></li>
+              <li><span class="cmd-chip">"How many unread emails"</span></li>
+              <li><span class="cmd-chip">"Read email 1" / "Open the first email"</span></li>
+              <li><span class="cmd-chip">"Next email" / "Previous email"</span></li>
+              <li><span class="cmd-chip">"More emails" (load next batch)</span></li>
+              <li><span class="cmd-chip">"Back to inbox"</span></li>
+              <li><span class="cmd-chip">"Show starred" / "Show important" / "Show sent"</span></li>
+              <li><span class="cmd-chip">"Search email for meeting notes"</span></li>
+              <li><span class="cmd-chip">"Who sent this"</span></li>
+            </ul>
+          </div>
+          <div class="cmd-group">
+            <p class="cmd-group-title">Gmail — Actions</p>
+            <ul class="cmd-list">
+              <li><span class="cmd-chip">"Reply thanks for the info"</span></li>
+              <li><span class="cmd-chip">"Send email to john@email.com saying hello"</span></li>
+              <li><span class="cmd-chip">"Archive email" / "Delete email"</span></li>
+              <li><span class="cmd-chip">"Mark important" / "Remove important"</span></li>
+              <li><span class="cmd-chip">"Star this email" / "Unstar"</span></li>
+              <li><span class="cmd-chip">"Mark as read" / "Mark as unread"</span></li>
+            </ul>
+          </div>
+          <div class="cmd-group">
             <p class="cmd-group-title">Navigation</p>
             <ul class="cmd-list">
               <li><span class="cmd-chip">"Scroll down / up"</span></li>
@@ -259,6 +284,37 @@
             <span id="ai-status-text" class="ai-status-text">Checking…</span>
           </div>
           <p class="s-hint">Priority: Chrome Built-in AI → Gemini API</p>
+        </div>
+        <div class="s-divider"></div>
+        <div class="s-section">
+          <p class="s-label">Gmail</p>
+          <div class="ai-status-row" aria-live="polite">
+            <span id="gmail-status-dot" class="ai-dot ai-dot--none"></span>
+            <span id="gmail-status-text" class="ai-status-text">Not connected</span>
+          </div>
+          <p class="s-hint">Connect your Google account to read and send email by voice.</p>
+          <div class="s-btn-row s-btn-row--compact">
+            <button id="btn-gmail-connect" class="s-btn s-btn--fill">Connect Gmail</button>
+            <button id="btn-gmail-disconnect" class="s-btn s-btn--outline" hidden>Disconnect</button>
+          </div>
+          <p id="gmail-feedback" class="s-feedback" aria-live="polite"></p>
+        </div>
+        <div class="s-divider"></div>
+        <div class="s-section">
+          <p class="s-label">Voice Settings</p>
+          <p class="s-hint">Choose the assistant voice and speaking volume.</p>
+          <label for="voice-select" class="s-mini-label">Voice</label>
+          <select id="voice-select" class="s-select" aria-label="Assistant voice">
+            <option value="">Default voice</option>
+          </select>
+          <label for="voice-volume" class="s-mini-label">Volume</label>
+          <div class="s-range-row">
+            <input id="voice-volume" class="s-range" type="range" min="0" max="100" step="5" value="100" aria-label="Assistant voice volume" />
+            <span id="voice-volume-value" class="s-range-value">100%</span>
+          </div>
+          <div class="s-btn-row s-btn-row--compact">
+            <button id="btn-test-voice" class="s-btn s-btn--outline">Test Voice</button>
+          </div>
         </div>
         <div class="s-divider"></div>
         <div class="s-section">

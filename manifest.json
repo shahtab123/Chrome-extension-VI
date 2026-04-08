@@ -10,12 +10,23 @@
     "scripting",
     "storage",
     "sidePanel",
-    "tts"
+    "tts",
+    "identity"
   ],
 
   "host_permissions": [
-    "https://generativelanguage.googleapis.com/*"
+    "https://generativelanguage.googleapis.com/*",
+    "https://www.googleapis.com/*"
   ],
+
+  "oauth2": {
+    "client_id": "378668947554-bq9d3q46bmbok8qaka082voh1c5sljlq.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.modify"
+    ]
+  },
 
   "background": {
     "service_worker": "background.js",

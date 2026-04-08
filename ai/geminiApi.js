@@ -143,6 +143,62 @@ export async function callGemini(userMessage, pageContext = '') {
 }
 
 /**
+ * Use Gemini to draft an email reply or compose a new email.
+ * Returns { subject, body } — plain text, ready to send.
+ */
+export async function draftEmailWithAI({ intent, originalEmail, recipientAddress, userName }) {
+  const apiKey = await getApiKey();
+  if (!apiKey) return null; // no key — caller will fall back to raw text
+
+  const senderName = userName || 'the user';
+  let prompt;
+
+  if (originalEmail) {
+    prompt =
+      `You are writing an email reply on behalf of ${senderName}.\n\n` +
+      `ORIGINAL EMAIL:\nFrom: ${originalEmail.from}\nSubject: ${originalEmail.subject}\nDate: ${originalEmail.date}\n` +
+      `Body:\n${(originalEmail.body || originalEmail.snippet || '').slice(0, 1500)}\n\n` +
+      `USER'S INTENT FOR THE REPLY: "${intent}"\n\n` +
+      `Write a clear, professional, friendly reply. Keep it concise. Do NOT include a subject line — only the body text. ` +
+      `Sign off with the user's name if known. No markdown, no formatting symbols.`;
+  } else {
+    prompt =
+      `You are composing a new email on behalf of ${senderName} to ${recipientAddress}.\n\n` +
+      `USER'S INTENT: "${intent}"\n\n` +
+      `Write the email. First line: "Subject: <your chosen subject>"\n` +
+      `Then a blank line, then the body. Keep it concise, professional, and friendly. ` +
+      `Sign off with the user's name if known. No markdown, no formatting symbols.`;
+  }
+
+  const payload = {
+    system_instruction: { parts: [{ text: 'You are an email writing assistant. Write natural, professional emails. No markdown. Plain text only.' }] },
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.7, maxOutputTokens: 500 },
+  };
+
+  const res = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) return null;
+
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  if (!text) return null;
+
+  if (originalEmail) {
+    return { body: text };
+  }
+
+  const subjectMatch = text.match(/^Subject:\s*(.+)/im);
+  const subject = subjectMatch ? subjectMatch[1].trim() : 'Message from Voice Assistant';
+  const body = text.replace(/^Subject:\s*.+\n*/im, '').trim();
+  return { subject, body };
+}
+
+/**
  * Tests the currently active key.
  * @returns {Promise<{ ok: boolean, message: string }>}
  */

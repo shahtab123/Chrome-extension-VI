@@ -6,7 +6,7 @@
 /**
  * Ask the background service worker to speak via chrome.tts.
  * @param {string} text
- * @param {{ rate?: number, pitch?: number, volume?: number }} [options]
+ * @param {{ rate?: number, pitch?: number, volume?: number, voiceName?: string }} [options]
  */
 export function speak(text, options = {}) {
   return new Promise((resolve, reject) => {
@@ -17,6 +17,7 @@ export function speak(text, options = {}) {
         rate:   options.rate   ?? 1.0,
         pitch:  options.pitch  ?? 1.0,
         volume: options.volume ?? 1.0,
+        voiceName: options.voiceName ?? null,
       },
       (response) => {
         if (chrome.runtime.lastError) {
@@ -25,7 +26,7 @@ export function speak(text, options = {}) {
           resolve(response);
         }
       }
-    );
+    ); 
   });
 }
 

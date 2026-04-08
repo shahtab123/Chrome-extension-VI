@@ -7,6 +7,7 @@ import {
   getActiveKeyId, testApiKey, callGemini, maskKey,
 } from './ai/geminiApi.js';
 import { processTurn, cleanupOldHistory } from './ai/memory.js';
+import { isGmailConnected, getAuthToken, removeCachedToken } from './browser/gmail.js';
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const btnStart        = document.getElementById('btn-start');
@@ -33,6 +34,15 @@ const btnToggleKey    = document.getElementById('btn-toggle-key');
 const btnSaveKey      = document.getElementById('btn-save-key');
 const btnTestNewKey   = document.getElementById('btn-test-new-key');
 const keyFeedback     = document.getElementById('key-feedback');
+const voiceSelect     = document.getElementById('voice-select');
+const voiceVolume     = document.getElementById('voice-volume');
+const voiceVolumeValue = document.getElementById('voice-volume-value');
+const btnTestVoice    = document.getElementById('btn-test-voice');
+const gmailStatusDot  = document.getElementById('gmail-status-dot');
+const gmailStatusText = document.getElementById('gmail-status-text');
+const btnGmailConnect = document.getElementById('btn-gmail-connect');
+const btnGmailDisconnect = document.getElementById('btn-gmail-disconnect');
+const gmailFeedback   = document.getElementById('gmail-feedback');
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let recognizer = null;
@@ -103,8 +113,9 @@ function startListening() {
           await processTurn(text, response);
 
           if (!skipSpeak && response) {
-            const { ttsRate = 1.0 } = await chrome.storage.local.get('ttsRate');
-            await speak(response, { rate: ttsRate });
+            const { ttsRate = 1.0, ttsVolume = 1.0, ttsVoiceName = '' } =
+              await chrome.storage.local.get(['ttsRate', 'ttsVolume', 'ttsVoiceName']);
+            await speak(response, { rate: ttsRate, volume: ttsVolume, voiceName: ttsVoiceName || undefined });
           }
           setStatus('listening');
         } catch (err) {
@@ -120,7 +131,20 @@ function startListening() {
         if (errCode === 'no-speech' || errCode === 'aborted') return;
 
         // Any real error (not-allowed, network, audio-capture, etc.) — stop fully.
-        showResponse(`Recognition error: ${errCode}`);
+        const errMap = {
+          'not-allowed': 'Microphone access was blocked or no microphone is available. Connect a mic and allow microphone access in Chrome site settings.',
+          'audio-capture': 'No microphone was detected. Please connect a microphone and try again.',
+          'service-not-allowed': 'Speech recognition service is blocked by browser settings.',
+          'network': 'Speech recognition is unavailable right now due to a network issue.',
+        };
+        const msg = errMap[errCode] ?? `Recognition error: ${errCode}`;
+        showResponse(msg);
+        chrome.storage.local
+          .get(['ttsRate', 'ttsVolume', 'ttsVoiceName'])
+          .then(({ ttsRate = 1.0, ttsVolume = 1.0, ttsVoiceName = '' }) =>
+            speak(msg, { rate: ttsRate, volume: ttsVolume, voiceName: ttsVoiceName || undefined })
+          )
+          .catch(() => {});
         setStatus('error');
         listeningRequested = false;
         setListeningUI(false);
@@ -248,6 +272,120 @@ function setKeyFeedback(msg, type = 'info') {
   keyFeedback.className   = `s-feedback s-feedback--${type}`;
 }
 
+// ─── Voice settings ───────────────────────────────────────────────────────────
+function populateVoiceSelect(voices, selectedVoiceName = '') {
+  if (!voiceSelect) return;
+  voiceSelect.innerHTML = '';
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = 'Default voice';
+  voiceSelect.appendChild(defaultOpt);
+
+  const seen = new Set();
+  voices
+    .sort((a, b) => (a.lang + a.voiceName).localeCompare(b.lang + b.voiceName))
+    .forEach((v) => {
+      const key = `${v.voiceName}__${v.lang}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const opt = document.createElement('option');
+      opt.value = v.voiceName;
+      opt.textContent = `${v.voiceName} (${v.lang})${v.remote ? ' · remote' : ''}`;
+      voiceSelect.appendChild(opt);
+    });
+
+  voiceSelect.value = selectedVoiceName || '';
+}
+
+async function loadVoiceSettings() {
+  const { ttsVolume = 1.0, ttsVoiceName = '' } =
+    await chrome.storage.local.get(['ttsVolume', 'ttsVoiceName']);
+
+  const volumePct = Math.round(Math.min(1, Math.max(0, ttsVolume)) * 100);
+  if (voiceVolume) voiceVolume.value = String(volumePct);
+  if (voiceVolumeValue) voiceVolumeValue.textContent = `${volumePct}%`;
+
+  if (chrome.tts?.getVoices) {
+    chrome.tts.getVoices((voices) => {
+      populateVoiceSelect(voices || [], ttsVoiceName);
+    });
+  }
+}
+
+if (voiceVolume) {
+  voiceVolume.addEventListener('input', async () => {
+    const pct = Number(voiceVolume.value);
+    const volume = Math.min(1, Math.max(0, pct / 100));
+    voiceVolumeValue.textContent = `${pct}%`;
+    await chrome.storage.local.set({ ttsVolume: volume });
+  });
+}
+
+if (voiceSelect) {
+  voiceSelect.addEventListener('change', async () => {
+    await chrome.storage.local.set({ ttsVoiceName: voiceSelect.value || '' });
+  });
+}
+
+if (btnTestVoice) {
+  btnTestVoice.addEventListener('click', async () => {
+    btnTestVoice.disabled = true;
+    try {
+      const { ttsRate = 1.0, ttsVolume = 1.0, ttsVoiceName = '' } =
+        await chrome.storage.local.get(['ttsRate', 'ttsVolume', 'ttsVoiceName']);
+      await speak(
+        'Hello. This is a test of your selected assistant voice and volume.',
+        { rate: ttsRate, volume: ttsVolume, voiceName: ttsVoiceName || undefined }
+      );
+      setKeyFeedback('Voice test played.', 'ok');
+    } catch (err) {
+      setKeyFeedback(`Voice test failed: ${err.message}`, 'error');
+    } finally {
+      btnTestVoice.disabled = false;
+    }
+  });
+}
+
+// ─── Gmail connection ─────────────────────────────────────────────────────────
+
+async function refreshGmailStatus() {
+  const connected = await isGmailConnected();
+  if (gmailStatusDot) gmailStatusDot.className = `ai-dot ai-dot--${connected ? 'gemini-api' : 'none'}`;
+  if (gmailStatusText) gmailStatusText.textContent = connected ? 'Connected' : 'Not connected';
+  if (btnGmailConnect) btnGmailConnect.hidden = connected;
+  if (btnGmailDisconnect) btnGmailDisconnect.hidden = !connected;
+}
+
+if (btnGmailConnect) {
+  btnGmailConnect.addEventListener('click', async () => {
+    btnGmailConnect.disabled = true;
+    if (gmailFeedback) { gmailFeedback.textContent = 'Signing in…'; gmailFeedback.className = 's-feedback s-feedback--info'; }
+    try {
+      await getAuthToken(true);
+      if (gmailFeedback) { gmailFeedback.textContent = 'Connected.'; gmailFeedback.className = 's-feedback s-feedback--ok'; }
+      await refreshGmailStatus();
+    } catch (err) {
+      if (gmailFeedback) { gmailFeedback.textContent = err.message; gmailFeedback.className = 's-feedback s-feedback--error'; }
+    } finally {
+      btnGmailConnect.disabled = false;
+    }
+  });
+}
+
+if (btnGmailDisconnect) {
+  btnGmailDisconnect.addEventListener('click', async () => {
+    btnGmailDisconnect.disabled = true;
+    try {
+      const token = await getAuthToken(false);
+      if (token) await removeCachedToken(token);
+    } catch { /* already disconnected */ }
+    await chrome.storage.local.remove(['gmailList', 'gmailCurrentId']);
+    if (gmailFeedback) { gmailFeedback.textContent = 'Disconnected. Sign-in will open automatically next time you use an email command.'; gmailFeedback.className = 's-feedback s-feedback--info'; }
+    await refreshGmailStatus();
+    btnGmailDisconnect.disabled = false;
+  });
+}
+
 // ─── Keys list renderer ───────────────────────────────────────────────────────
 
 async function renderKeysList() {
@@ -313,6 +451,8 @@ function escHtml(str) {
 
 async function refreshSettings() {
   await renderKeysList();
+  await loadVoiceSettings();
+  await refreshGmailStatus();
   const mode = await getActiveAIMode();
   const labels = {
     'built-in':   '✓ Chrome Built-in AI (on-device)',

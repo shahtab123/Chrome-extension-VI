@@ -26,6 +26,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         rate:   message.rate   ?? 1.0,
         pitch:  message.pitch  ?? 1.0,
         volume: message.volume ?? 1.0,
+        voiceName: message.voiceName || undefined,
         onEvent(event) {
           if (event.type === 'end' || event.type === 'error') {
             chrome.runtime.sendMessage({ type: 'TTS_DONE' }).catch(() => {});
