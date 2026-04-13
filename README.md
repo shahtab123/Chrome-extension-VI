@@ -4,6 +4,70 @@ A voice-controlled assistant for visually impaired users. **Chrome extension** (
 
 ---
 
+## Getting started for new users
+
+Follow these steps the first time you use the extension.
+
+1. **Install** — Load the unpacked folder in Chrome (see [Setup » 1. Load the extension](#1-load-the-extension)).
+2. **Open the assistant** — Click the extension icon to open the **side panel**, or press **Alt+Shift+1** to toggle listening (see [Keyboard shortcut](#4-keyboard-shortcut)).
+3. **Microphone** — Tap **Start listening**. When Chrome asks, **Allow** the microphone. If recognition fails with “blocked”, open the site settings for the extension and allow the mic.
+4. **Gemini API (strongly recommended)** — In Settings (gear icon), add a free API key so open-ended questions work and **Gmail replies / new emails can be drafted by AI** from short spoken instructions. See [Setup » 3](#3-optional-add-a-gemini-api-key).
+5. **Google account (Gmail + more)** — If you are the **developer** distributing the extension, you must create a Google Cloud project, enable the **Google APIs** you need (Gmail, and optionally Drive, Docs, Calendar — see [Setup » 5](#5-google-oauth-setup-gmail-now-drivedocscalendar-ready)), and put an **OAuth client ID** (Chrome Extension type) in `manifest.json`. End users then only complete a one-time Google sign-in (and again if you add new scopes later). See [Gmail setup checklist (step-by-step)](#gmail-setup-checklist-step-by-step-for-developers) and [OAuth scopes: what they are and how to add them](#oauth-scopes-what-they-are-and-how-to-add-them) below.
+6. **Voice settings** — In Settings, pick **Voice** and **Volume**, and use **Test Voice** to confirm `chrome.tts` sounds right.
+7. **Discover commands** — Expand **Commands** in the side panel, or open the full reference: **[COMMAND_REFERENCE.md](COMMAND_REFERENCE.md)**.
+
+### Gmail setup checklist (step-by-step for developers)
+
+Use this so “check my email”, “open Gmail”, and related voice commands work for everyone who installs your build.
+
+| Step | What to do |
+|------|------------|
+| 1 | Go to [Google Cloud Console](https://console.cloud.google.com/) → create or select a **project**. |
+| 2 | **APIs & Services** → **Library** → enable **Gmail API**. Also enable **Google Drive API**, **Google Docs API**, and **Google Calendar API** if your build uses those features (the extension’s `manifest.json` may request their scopes — each API must be enabled or requests will fail). |
+| 3 | **OAuth consent screen** → choose **External** (or Internal for Workspace-only) → add app name, support email, developer contact. |
+| 4 | On the consent screen, add **scopes** that **exactly match** `manifest.json` under `oauth2` → `scopes` (see [OAuth scopes: what they are and how to add them](#oauth-scopes-what-they-are-and-how-to-add-them) for the full list and meanings). |
+| 5 | **Test users** — While the app is in testing, add Google accounts that may sign in. |
+| 6 | **Credentials** → **Create credentials** → **OAuth client ID** → application type **Chrome extension** → paste your **Extension ID** from `chrome://extensions` (Developer mode on). |
+| 7 | Copy the **Client ID** (ends with `.apps.googleusercontent.com`) into `manifest.json` → `oauth2` → `client_id`. |
+| 8 | **Reload** the extension on `chrome://extensions`. |
+| 9 | Sign in once: say **“check my email”** or open **Settings** → **Connect Gmail**. |
+
+**End users** do not edit Cloud Console; they only approve the permission screen the first time they use email features.
+
+**AI-written replies** — With a Gemini key saved, phrases like “reply with a detailed apology” use the original email as context and send a full reply. Without a key, the spoken text is sent as-is.
+
+### OAuth scopes: what they are and how to add them
+
+**What scopes are** — They are permission strings Google shows on the consent screen (“This extension can …”). Your extension declares them in `manifest.json` under `oauth2` → `scopes`. The **OAuth consent screen** in Google Cloud must list the **same** scopes, or users may see errors when signing in.
+
+**How a new developer adds them (checklist)**
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) → select your project.
+2. **APIs & Services** → **Library** → enable every API you need: **Gmail API**, **Google Drive API**, **Google Docs API**, **Google Calendar API** (enable each one you will call from code).
+3. **APIs & Services** → **OAuth consent screen** → edit your app → **Scopes** → **Add or remove scopes** → add each scope URL below (or paste the list from your repo’s `manifest.json` so it always matches).
+4. **Credentials** — keep your single **OAuth client ID** of type **Chrome Extension** (same extension ID as in `chrome://extensions`).
+5. Reload the extension; the next Google sign-in may ask users to approve **new** permissions if you added scopes.
+
+**Scopes currently declared in `manifest.json` (and what each is for)**
+
+| Scope | Purpose |
+|-------|---------|
+| `https://www.googleapis.com/auth/gmail.readonly` | Read email messages and settings |
+| `https://www.googleapis.com/auth/gmail.send` | Send email on the user’s behalf |
+| `https://www.googleapis.com/auth/gmail.modify` | Read, compose, send, archive, trash, labels (broader Gmail access) |
+| `https://www.googleapis.com/auth/drive.readonly` | List and read Drive files (e.g. find Docs by name) |
+| `https://www.googleapis.com/auth/drive.file` | Access files the app creates or opens with the user (narrower write surface than full Drive) |
+| `https://www.googleapis.com/auth/documents.readonly` | Read Google Docs document content via the Docs API |
+| `https://www.googleapis.com/auth/calendar.readonly` | Read calendars and events |
+| `https://www.googleapis.com/auth/calendar.events` | Create, update, or delete calendar events |
+
+**Notes for new users**
+
+- The **OAuth client ID** in `manifest.json` is not a secret like a Gemini API key; it is tied to your **extension ID**. Do **not** put **client secrets** or **Gemini keys** in the public repo — use Settings in the extension for API keys.
+- **Drive / Docs / Calendar voice features** require both: APIs enabled in Cloud Console, scopes in consent screen + `manifest.json`, and **code** that calls those APIs (Gmail is already implemented; others can be added over time).
+
+---
+
 ## Features
 
 - **Voice in, speech out** — Web Speech API for recognition, `chrome.tts` for responses
@@ -16,6 +80,10 @@ A voice-controlled assistant for visually impaired users. **Chrome extension** (
 - **Chrome Built-in AI (optional)** — If Gemini Nano is enabled (~22 GB disk), it is used first; otherwise Gemini API
 - **Side panel UI** — Black & white glassmorphism design; circular mic with pulse animation when listening; Settings as full-screen view with back button
 - **Keyboard shortcut** — **Alt+Shift+1** toggles listening (configurable at `chrome://extensions/shortcuts`)
+- **Gmail (OAuth)** — Read inbox, unread count, paginated lists, read by number, next/previous, search, star, important, archive, trash, reply and compose (with optional **AI drafting** via Gemini when a key is set)
+- **Google Drive + Docs** — List, search, open, and read Google Docs by name or number; create new docs; "read this doc" on any open Google Doc tab; paginated reading with "continue reading"
+- **Google Calendar** — Read today/tomorrow/this week/next week; next event; events on a specific date; create events from natural speech (AI parses date, time, title, location); delete events
+- **Voice output settings** — Choose TTS voice and volume in Settings; test button for quick verification
 
 ---
 
@@ -40,7 +108,10 @@ code/
 │   └── memory.js              # Conversation memory — profile facts, session history, context builder
 │
 ├── browser/
-│   └── tabsManager.js         # getActiveTab, openTab, closeTab, captureTab
+│   ├── tabsManager.js         # getActiveTab, openTab, closeTab, captureTab
+│   ├── gmail.js               # Gmail REST API + chrome.identity OAuth
+│   ├── drive.js               # Google Drive + Docs API (list, search, read, create, export)
+│   └── calendar.js            # Google Calendar API (events, create, delete, date parsing)
 │
 ├── content/
 │   └── domReader.js           # readPageContent, getLinks, getStructuredContent
@@ -51,6 +122,7 @@ code/
 │   └── icon-128.png
 │
 ├── project plan.md           # Full product & roadmap
+├── COMMAND_REFERENCE.md    # Full list of voice commands and behavior
 └── README.md                 # This file
 ```
 
@@ -85,6 +157,7 @@ Use this once so Google account features work in production.
    - **Google Drive API** (future)
    - **Google Docs API** (future)
    - **Google Calendar API** (future)
+   - **Also enable in Library when you use them:** **Google Drive API**, **Google Docs API**, and **Google Calendar API** are declared in `manifest.json` scopes — turn each API **On** in the same project so REST calls succeed once voice features use them. (The “future” bullets above refer to product features in code; the APIs themselves should still be enabled in Cloud if those scopes are in your manifest.)
 3. Configure **OAuth consent screen** (External app), fill app info, and add scopes.
 4. Create **OAuth client ID** of type **Chrome Extension** and use your extension ID from `chrome://extensions`.
 5. Put the generated client ID into `manifest.json` under `oauth2.client_id`.
@@ -103,9 +176,18 @@ Recommended OAuth scopes:
   - `https://www.googleapis.com/auth/calendar.readonly`  
   - `https://www.googleapis.com/auth/calendar.events`
 
+**Canonical list** — The extension’s source of truth is `manifest.json` → `oauth2` → `scopes`. Keep the Cloud Console consent screen in sync with that array. For a plain-English table of each scope, see [OAuth scopes: what they are and how to add them](#oauth-scopes-what-they-are-and-how-to-add-them) above.
+
 Sign-in behavior:
 - First use opens a Google sign-in/consent popup.
 - After approval, token is cached by Chrome; users do not need to sign in each time.
+
+### 6. Side panel: Settings overview
+
+- **AI status** — Shows whether Chrome Built-in AI or Gemini API is active.
+- **Gmail** — **Connect Gmail** / **Disconnect** and connection status (same account flow as voice “check my email”).
+- **Voice** — Dropdown for `chrome.tts` voice, volume slider, **Test Voice**.
+- **API keys** — Add, test, activate, and remove Gemini keys.
 
 ---
 
@@ -131,7 +213,13 @@ User speaks (mic or Alt+Shift+1)
 
 ### UI
 - **Main view**: Header (title + settings gear), circular mic (pulse ring when listening), Stop button, shortcut hint, status pill, Commands list (with all categories), Transcript, Response.
-- **Settings view**: Back arrow + "Settings" header, then AI status, saved keys list (with Set Active / Remove), and Add Key form.
+- **Settings view**: Back arrow + "Settings" header, then AI status, Gmail connect/disconnect, voice settings (voice, volume, test), saved keys list (with Set Active / Remove), and Add Key form.
+
+---
+
+## Full command list
+
+Every phrase the extension tries to match is documented in **[COMMAND_REFERENCE.md](COMMAND_REFERENCE.md)** (grouped by category, with notes on Gmail, YouTube, and AI). The side panel **Commands** section is a shorter quick reference.
 
 ---
 
@@ -302,7 +390,7 @@ More phrasing is supported (e.g. "What site is this", "Which page am I on"). Ope
 - [ ] User settings: TTS rate/voice, recognition language
 - [ ] Summarization API (when available) for "Summarize this page"
 - [ ] Vision: screenshot + Gemini vision for "What's on screen?"
-- [ ] Gmail / Google Docs–specific commands
+- [ ] Gmail / Google Docs–specific commands — *Gmail voice commands are implemented (see COMMAND_REFERENCE.md); Google Docs commands are not yet implemented*
 - [ ] More site-specific commands (Spotify, Netflix, etc.)
 
 ---
@@ -310,3 +398,5 @@ More phrasing is supported (e.g. "What site is this", "Which page am I on"). Ope
 ## License & repo
 
 Part of the **Chrome extension for the blind** project. Repository: [Chrome-extension-VI](https://github.com/shahtab123/Chrome-extension-VI).
+
+**Command reference:** [COMMAND_REFERENCE.md](COMMAND_REFERENCE.md)

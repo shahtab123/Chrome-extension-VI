@@ -223,6 +223,61 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       break;
     }
 
+    // ── Headings navigation ────────────────────────────────────────────────
+
+    case 'GET_HEADINGS': {
+      const headings = getVisibleHeadings();
+      currentHeadingIdx = -1;
+      if (!headings.length) {
+        sendResponse({ ok: false, message: 'No headings found on this page.' });
+      } else {
+        const list = headings.map((h, i) => `${i + 1}: ${h.text}`).join('. ');
+        sendResponse({ ok: true, count: headings.length, list });
+      }
+      break;
+    }
+
+    case 'NEXT_HEADING': {
+      const headings = getVisibleHeadings();
+      if (!headings.length) { sendResponse({ error: 'No headings on this page.' }); break; }
+      currentHeadingIdx = Math.min(currentHeadingIdx + 1, headings.length - 1);
+      scrollToHeading(headings[currentHeadingIdx].el);
+      sendResponse({ ok: true, text: headings[currentHeadingIdx].text, index: currentHeadingIdx, total: headings.length });
+      break;
+    }
+
+    case 'PREV_HEADING': {
+      const headings = getVisibleHeadings();
+      if (!headings.length) { sendResponse({ error: 'No headings on this page.' }); break; }
+      currentHeadingIdx = Math.max(currentHeadingIdx - 1, 0);
+      scrollToHeading(headings[currentHeadingIdx].el);
+      sendResponse({ ok: true, text: headings[currentHeadingIdx].text, index: currentHeadingIdx, total: headings.length });
+      break;
+    }
+
+    case 'GO_TO_HEADING': {
+      const headings = getVisibleHeadings();
+      const idx = (message.index ?? 1) - 1;
+      if (!headings.length) { sendResponse({ error: 'No headings on this page.' }); break; }
+      if (idx < 0 || idx >= headings.length) { sendResponse({ error: `Only ${headings.length} heading${headings.length === 1 ? '' : 's'} on this page.` }); break; }
+      currentHeadingIdx = idx;
+      scrollToHeading(headings[idx].el);
+      sendResponse({ ok: true, text: headings[idx].text, index: idx, total: headings.length });
+      break;
+    }
+
+    case 'FIND_HEADING': {
+      const headings = getVisibleHeadings();
+      if (!headings.length) { sendResponse({ error: 'No headings on this page.' }); break; }
+      const query = (message.query || '').toLowerCase();
+      const match = headings.find(h => h.text.toLowerCase().includes(query));
+      if (!match) { sendResponse({ error: `No heading matching "${message.query}" found.` }); break; }
+      currentHeadingIdx = headings.indexOf(match);
+      scrollToHeading(match.el);
+      sendResponse({ ok: true, text: match.text, index: currentHeadingIdx, total: headings.length });
+      break;
+    }
+
     case 'YT_CONTROL': {
       const video = document.querySelector('video');
       if (!video) {
@@ -697,4 +752,26 @@ function getGenericMediaItems() {
     if (items.length >= 15) break;
   }
   return items;
+}
+
+// ─── Headings helpers ─────────────────────────────────────────────────────────
+
+let currentHeadingIdx = -1;
+
+function getVisibleHeadings() {
+  return Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+    .filter(el => {
+      if (!el.textContent.trim()) return false;
+      // Check element is visible (not hidden)
+      const style = window.getComputedStyle(el);
+      return style.display !== 'none' && style.visibility !== 'hidden' && el.offsetHeight > 0;
+    })
+    .map(el => ({ el, text: el.textContent.trim().replace(/\s+/g, ' '), level: parseInt(el.tagName[1]) }));
+}
+
+function scrollToHeading(el) {
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // Make focusable and focus for screen-reader compatibility
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+  el.focus({ preventScroll: true });
 }

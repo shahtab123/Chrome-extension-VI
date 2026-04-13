@@ -211,6 +211,112 @@ export async function testApiKey() {
   }
 }
 
+/**
+ * Generate document content using Gemini.
+ *
+ * Modes:
+ *   1. Write from scratch: pass { topic, style, instructions }
+ *   2. Append a section:   pass { existingContent, appendInstructions }
+ *   3. Rewrite / edit:     pass { existingContent, editInstructions }
+ *
+ * Returns plain text string (no markdown) ready to write into a Google Doc.
+ * Throws if no API key is configured.
+ */
+export async function generateDocContent({ topic, style, instructions, existingContent, appendInstructions, editInstructions }) {
+  const apiKey = await getApiKey();
+  if (!apiKey) throw new Error('No Gemini API key set. Add one in Settings to use AI document writing.');
+
+  let prompt;
+
+  if (editInstructions && existingContent) {
+    // Mode 3 — edit / rewrite existing document
+    prompt =
+      `You are editing a Google Doc on behalf of the user.\n\n` +
+      `CURRENT DOCUMENT CONTENT:\n${existingContent.slice(0, 4000)}\n\n` +
+      `USER INSTRUCTION: "${editInstructions}"\n\n` +
+      `Write the complete updated document. Return ONLY the document body text — ` +
+      `no headings like "Here is your document:", no markdown symbols, no bullet dashes unless the user asked for them. ` +
+      `Plain prose, ready to save directly into Google Docs.`;
+  } else if (appendInstructions && existingContent) {
+    // Mode 2 — append a new section
+    prompt =
+      `You are adding content to an existing Google Doc.\n\n` +
+      `EXISTING DOCUMENT (for context):\n${existingContent.slice(0, 3000)}\n\n` +
+      `USER WANTS TO ADD: "${appendInstructions}"\n\n` +
+      `Write ONLY the new section to be appended — not the full document again. ` +
+      `Match the tone and style of the existing content. Plain text only, no markdown.`;
+  } else {
+    // Mode 1 — write from scratch
+    const styleNote = style ? `Style: ${style}.` : 'Style: clear, informative, and well-structured.';
+    const extra     = instructions ? `\nAdditional instructions: ${instructions}` : '';
+    prompt =
+      `Write a complete, well-structured document about: "${topic}".\n` +
+      `${styleNote}${extra}\n\n` +
+      `Return ONLY the document body text — no preamble like "Here is your document:", ` +
+      `no markdown formatting symbols, no bullet dashes unless the content calls for them. ` +
+      `Plain prose ready to save directly into Google Docs.`;
+  }
+
+  const payload = {
+    system_instruction: {
+      parts: [{ text: 'You are an expert document writer. Write clear, complete, well-structured documents. Return only the document text — no commentary, no markdown, no formatting symbols.' }],
+    },
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+  };
+
+  const res = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message ?? `HTTP ${res.status}`);
+  }
+
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  if (!text) throw new Error('Gemini returned an empty response.');
+  return text;
+}
+
+/**
+ * General-purpose structured JSON extractor using Gemini.
+ * Useful for parsing dates, event details, doc names etc. from free-form speech.
+ * Returns parsed JS object or null on failure.
+ */
+export async function parseWithAI(prompt) {
+  const apiKey = await getApiKey();
+  if (!apiKey) return null;
+
+  const res = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system_instruction: {
+        parts: [{ text: 'You are a data extraction assistant. Return ONLY valid JSON with no markdown, no code fences, no explanation.' }],
+      },
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 400 },
+    }),
+  });
+
+  if (!res.ok) return null;
+  const data = await res.json();
+  const raw  = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+  if (!raw) return null;
+
+  try {
+    // Strip optional markdown code fences if the model includes them
+    const cleaned = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+    return JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+}
+
 /** Returns a masked display string: first 8 chars + … + last 4 chars */
 export function maskKey(value) {
   if (!value || value.length < 12) return '••••••••••••';

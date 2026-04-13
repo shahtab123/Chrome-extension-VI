@@ -8,7 +8,19 @@
 //
 // Falls back gracefully when a layer is unavailable.
 
-import { callGemini, getApiKey, draftEmailWithAI } from './geminiApi.js';
+import { callGemini, getApiKey, draftEmailWithAI, parseWithAI, generateDocContent } from './geminiApi.js';
+import {
+  listDocs, searchDocs, searchAllFiles, getDocContent, createDoc,
+  writeToDoc, appendToDoc, createDocWithContent,
+  fileUrl, mimeToType, docIdFromUrl,
+} from '../browser/drive.js';
+import {
+  getEventsToday, getEventsTomorrow, getEventsThisWeek, getEventsNextWeek,
+  getNextEvent, getUpcomingEvents, getEventsForDate, getEvents,
+  createEvent, deleteEvent, parseEvent,
+  formatEventList, spokenEvent, spokenDate,
+  quickDateParse, buildDateTime, addHours, toISODate,
+} from '../browser/calendar.js';
 import { getUserProfile, getSessionHistory, addProfileFact } from './memory.js';
 import {
   getAuthToken, removeCachedToken, isGmailConnected,
@@ -28,6 +40,18 @@ const GMAIL_SIGNIN_MSG =
   'A Google sign-in window has opened. Please complete sign-in — you will only need to do this once.';
 
 let aiSession = null;
+
+// ─── Cross-command state ───────────────────────────────────────────────────────
+
+/** Last spoken response text — used by "repeat that" command. */
+let lastSpokenResponse = '';
+
+/**
+ * Pending destructive-action confirmation.
+ * Shape: { action: async () => string, label: string }
+ * Set when a dangerous command needs a yes/no confirmation.
+ */
+let pendingConfirmation = null;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -72,6 +96,37 @@ async function getActiveTabUrl() {
   return tab?.url ?? '';
 }
 
+/** Parse a natural-language timer duration into total minutes (may be fractional). */
+function parseTimerDuration(lower) {
+  let totalMinutes = 0;
+
+  if (lower.includes('half an hour') || lower.includes('half hour')) return 30;
+  if (lower.includes('an hour') || lower.includes('one hour'))        return 60;
+
+  const hourMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:hour|hr)s?/);
+  const minMatch  = lower.match(/(\d+(?:\.\d+)?)\s*(?:minute|min)s?/);
+  const secMatch  = lower.match(/(\d+(?:\.\d+)?)\s*(?:second|sec)s?/);
+
+  if (hourMatch) totalMinutes += parseFloat(hourMatch[1]) * 60;
+  if (minMatch)  totalMinutes += parseFloat(minMatch[1]);
+  if (secMatch)  totalMinutes += parseFloat(secMatch[1]) / 60;
+
+  return totalMinutes > 0 ? totalMinutes : null;
+}
+
+/** Format total minutes into a readable string like "5 minutes" or "1 hour 30 minutes". */
+function formatDuration(totalMinutes) {
+  const hours = Math.floor(totalMinutes / 60);
+  const mins  = Math.round(totalMinutes % 60);
+  const secs  = Math.round((totalMinutes * 60) % 60);
+
+  const parts = [];
+  if (hours) parts.push(`${hours} hour${hours === 1 ? '' : 's'}`);
+  if (mins)  parts.push(`${mins} minute${mins === 1 ? '' : 's'}`);
+  if (!hours && !mins && secs) parts.push(`${secs} second${secs === 1 ? '' : 's'}`);
+  return parts.join(' and ') || '1 minute';
+}
+
 function siteFromUrl(url) {
   try { return new URL(url).hostname.replace('www.', ''); } catch { return ''; }
 }
@@ -98,6 +153,50 @@ const SITE_SEARCH_URLS = {
 export async function handleCommand(text) {
   const lower = text.toLowerCase().trim();
 
+  // ── Pending confirmation (yes / no for destructive actions) ───────────────
+  if (pendingConfirmation) {
+    const { action, label } = pendingConfirmation;
+
+    if (any(lower, 'yes', 'yeah', 'yep', 'confirm', 'do it', 'go ahead', 'proceed', 'sure', 'ok', 'okay', 'correct')) {
+      pendingConfirmation = null;
+      const result = await action();
+      _storeLastResponse(result);
+      return result;
+    }
+
+    if (any(lower, 'no', 'nope', 'cancel', 'stop', 'nevermind', 'never mind', 'abort', "don't", 'nah')) {
+      pendingConfirmation = null;
+      return `Cancelled. "${label}" was not performed.`;
+    }
+
+    // Something else was said — re-ask
+    return `Please say "yes" to confirm or "no" to cancel "${label}".`;
+  }
+
+  // ── Repeat last response ──────────────────────────────────────────────────
+  if (
+    any(lower, 'repeat that', 'say that again', 'say it again', 'what did you say',
+               'repeat last', 'one more time', 'pardon', 'come again', 'again please') ||
+    lower === 'again' || lower === 'repeat'
+  ) {
+    if (lastSpokenResponse) return lastSpokenResponse;
+    return 'Nothing to repeat yet.';
+  }
+
+  const result = await _dispatchCommand(text, lower);
+  _storeLastResponse(result);
+  return result;
+}
+
+/** Store the spoken text from a result (string or { text, skipSpeak }) for repeat. */
+function _storeLastResponse(result) {
+  if (!result) return;
+  const spoken = typeof result === 'string' ? result : result?.text;
+  // Don't overwrite with skip-speak control messages
+  if (spoken && !result?.skipSpeak) lastSpokenResponse = spoken;
+}
+
+async function _dispatchCommand(text, lower) {
   // Layer 1 — Chrome API (tabs, time, memory, navigation)
   const apiResponse = await tryChromAPIQuery(lower);
   if (apiResponse !== null) return apiResponse;
@@ -136,9 +235,11 @@ async function tryChromAPIQuery(lower) {
     return { text: 'Resumed.', skipSpeak: true };
   }
 
-  if (any(lower, 'stop reading', 'stop voice', 'stop speaking', 'mute voice')) {
+  if (any(lower, 'stop reading', 'stop voice', 'stop speaking', 'mute voice',
+                 'stop talking', 'be quiet', 'quiet', 'shush', 'shut up', 'silence',
+                 'enough', 'stop it', 'stop now')) {
     await sendRuntime({ type: 'STOP_SPEAKING' });
-    return { text: 'Stopped reading.', skipSpeak: true };
+    return { text: 'Stopped.', skipSpeak: true };
   }
 
   if (any(lower, 'read slower', 'speak slower', 'slow down voice', 'slower')) {
@@ -153,6 +254,121 @@ async function tryChromAPIQuery(lower) {
     const next = Math.min(2.0, Number((ttsRate + 0.15).toFixed(2)));
     await chrome.storage.local.set({ ttsRate: next });
     return `Reading speed set to ${next}x.`;
+  }
+
+  // ── Headings navigation ────────────────────────────────────────────────────
+
+  if (
+    any(lower, 'what headings', 'list headings', 'show headings', 'headings on this page',
+               'what are the headings', 'page headings', 'all headings')
+  ) {
+    const res = await sendToContent({ type: 'GET_HEADINGS' });
+    if (!res?.ok) return res?.message || 'No headings found on this page.';
+    return `This page has ${res.count} heading${res.count === 1 ? '' : 's'}. ${res.list}. Say "go to heading 1" or "next heading" to navigate.`;
+  }
+
+  if (any(lower, 'next heading', 'go to next heading', 'next section', 'skip to next section')) {
+    const res = await sendToContent({ type: 'NEXT_HEADING' });
+    if (res?.error) return res.error;
+    return `Heading ${res.index + 1} of ${res.total}: ${res.text}.`;
+  }
+
+  if (any(lower, 'previous heading', 'prev heading', 'go back to heading', 'last heading', 'go to previous heading')) {
+    const res = await sendToContent({ type: 'PREV_HEADING' });
+    if (res?.error) return res.error;
+    return `Heading ${res.index + 1} of ${res.total}: ${res.text}.`;
+  }
+
+  {
+    // "go to heading 3" / "jump to heading 2"
+    const headingNumMatch = lower.match(/(?:go to|jump to|navigate to|skip to)\s+heading\s+(?:number\s+)?(\d{1,2})/);
+    if (headingNumMatch) {
+      const res = await sendToContent({ type: 'GO_TO_HEADING', index: parseInt(headingNumMatch[1], 10) });
+      if (res?.error) return res.error;
+      return `Jumped to heading ${res.index + 1}: ${res.text}.`;
+    }
+  }
+
+  {
+    // "go to the introduction" / "jump to the conclusion" / "find heading about X"
+    const headingNameMatch = lower.match(
+      /(?:go to|jump to|navigate to|find heading|jump to section|go to section)\s+(?:the\s+)?(.{3,40})/
+    );
+    if (headingNameMatch && !headingNameMatch[1].match(/^\d+$/)) {
+      const query = headingNameMatch[1].trim();
+      const res = await sendToContent({ type: 'FIND_HEADING', query });
+      if (res?.error) return res.error;
+      return `Found: ${res.text} (heading ${res.index + 1} of ${res.total}).`;
+    }
+  }
+
+  // ── Timer / Alarm ─────────────────────────────────────────────────────────
+
+  if (
+    any(lower, 'set a timer', 'set timer', 'timer for', 'remind me in',
+               'alarm for', 'set alarm', 'countdown', 'alert me in',
+               'notify me in', 'wake me in', 'set a', 'set me a') &&
+    any(lower, 'minute', 'minutes', 'second', 'seconds', 'hour', 'hours', 'min', 'mins', 'sec', 'secs')
+  ) {
+    const minutes = parseTimerDuration(lower);
+    if (!minutes) return 'How long should I set the timer for? For example, say "set a 5 minute timer".';
+    const label  = formatDuration(minutes);
+    const name   = `va_timer_${Date.now()}`;
+    await sendRuntime({ type: 'CREATE_ALARM', name, delayMinutes: minutes, label });
+    return `Timer set for ${label}. I'll let you know when it's done.`;
+  }
+
+  if (any(lower, 'cancel timer', 'stop timer', 'clear timer', 'cancel alarm',
+                 'dismiss timer', 'cancel all timers', 'stop all timers')) {
+    const res = await sendRuntime({ type: 'CANCEL_ALL_ALARMS' });
+    const n = res?.count ?? 0;
+    return n > 0 ? `${n} timer${n === 1 ? '' : 's'} cancelled.` : 'No active timers to cancel.';
+  }
+
+  if (any(lower, 'how long left', 'time left on timer', 'time remaining', 'timer status',
+                 'how much time left', 'check timer', 'check my timer', 'whats left on timer')) {
+    const res = await sendRuntime({ type: 'LIST_ALARMS' });
+    if (!res?.alarms?.length) return 'No active timers.';
+    const parts = res.alarms.map((a) => {
+      const remainingMs  = Math.max(0, a.scheduledTime - Date.now());
+      const remainingMin = remainingMs / 60000;
+      const label        = res.meta?.[a.name]?.label || 'timer';
+      if (remainingMin < 1) return `${label}: less than a minute remaining`;
+      return `${label}: about ${Math.ceil(remainingMin)} minute${Math.ceil(remainingMin) === 1 ? '' : 's'} remaining`;
+    });
+    return parts.join('. ') + '.';
+  }
+
+  // ── Health / system check ──────────────────────────────────────────────────
+
+  if (
+    any(lower, 'health check', 'are you working', 'test yourself', 'test everything',
+               'system check', 'status check', 'self test', 'check yourself',
+               'is everything working', 'is everything ok', 'diagnostic',
+               'run a test', 'check your status')
+  ) {
+    const checks = [];
+
+    // Microphone — if we received the command, recognition is working
+    checks.push('Microphone: Working');
+
+    // TTS — check voices
+    const voices = await new Promise((resolve) => chrome.tts.getVoices(resolve));
+    checks.push(`Text to speech: ${voices?.length ? `${voices.length} voice${voices.length === 1 ? '' : 's'} available` : 'No voices found'}`);
+
+    // Gemini API key
+    const apiKey = await getApiKey();
+    checks.push(`Gemini AI: ${apiKey ? 'API key configured' : 'No API key — add one in Settings'}`);
+
+    // Google auth — try non-interactive token
+    try {
+      const token = await getAuthToken(false);
+      checks.push(token ? 'Google account: Signed in' : 'Google account: Not signed in');
+    } catch {
+      checks.push('Google account: Not signed in — Gmail, Docs, and Calendar will prompt you on first use');
+    }
+
+    return `System check complete. ${checks.join('. ')}.`;
   }
 
   // ── How many tabs ──────────────────────────────────────────────────────────
@@ -699,9 +915,17 @@ async function tryChromAPIQuery(lower) {
     try {
       const cur = await requireOpenEmail();
       if (cur.error) return cur.error;
-      await trashMessage(cur.id);
-      await chrome.storage.local.remove(['gmailCurrentId', 'gmailCurrentIdx']);
-      return 'Email moved to trash. Say "next email" to continue.';
+      const fromName    = cur.from    ? ` from ${cur.from}`                  : '';
+      const subjectHint = cur.subject ? ` — "${cur.subject.slice(0, 40)}"` : '';
+      pendingConfirmation = {
+        label: `delete email${fromName}`,
+        action: async () => {
+          await trashMessage(cur.id);
+          await chrome.storage.local.remove(['gmailCurrentId', 'gmailCurrentIdx']);
+          return 'Email moved to trash. Say "next email" to continue or "check my email" for a fresh list.';
+        },
+      };
+      return `Are you sure you want to delete the email${fromName}${subjectHint}? Say "yes" to confirm or "no" to cancel.`;
     } catch (err) { return `Could not delete: ${err.message}`; }
   }
 
@@ -848,6 +1072,508 @@ async function tryChromAPIQuery(lower) {
       const email = await getMessage(cur.id);
       return `This email is from ${email.from}. Subject: ${email.subject}.`;
     } catch (err) { return `Could not get sender: ${err.message}`; }
+  }
+
+  // ── Google Drive & Docs ────────────────────────────────────────────────
+  // Every command auto-triggers sign-in on first use — same OAuth token as Gmail.
+
+  // Intent detection helper (broader than keyword matching)
+  const isDriveIntent = any(lower,
+    'doc', 'document', 'docs', 'drive', 'file', 'files', 'sheet', 'spreadsheet', 'slides', 'presentation',
+    'google doc', 'google drive', 'my document', 'my file', 'my doc'
+  );
+
+  if (isDriveIntent) {
+    try {
+
+      // ── "Read this doc" / "read what's on this page" on a Google Doc tab ──
+      if (
+        any(lower, 'read this doc', 'read this document', 'read the doc', 'read the document',
+                   'read this page', 'whats on this doc', "what's in this document",
+                   'read current doc', 'read current document', 'read it', 'read this')
+      ) {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const docId = docIdFromUrl(tab?.url || '');
+        if (docId) {
+          const { title, text } = await getDocContent(docId);
+          await chrome.storage.local.set({ driveCurrentDocId: docId, driveCurrentDocTitle: title });
+          const excerpt = text.slice(0, 2500);
+          return `Reading: ${title}. ${excerpt}${text.length > 2500 ? ' … say "continue reading" for more.' : ''}`;
+        }
+        return 'I can not find a Google Doc on this tab. Open a Google Doc first, then say "read this doc".';
+      }
+
+      // ── "Continue reading doc" / "read more" ──────────────────────────────
+      if (any(lower, 'continue reading', 'read more doc', 'more of the doc', 'next part', 'continue doc')) {
+        const { driveCurrentDocId, driveReadOffset = 0 } =
+          await chrome.storage.local.get(['driveCurrentDocId', 'driveReadOffset']);
+        if (!driveCurrentDocId) return 'No document is open. Open a Google Doc tab and say "read this doc".';
+        const { text } = await getDocContent(driveCurrentDocId);
+        const chunk = text.slice(driveReadOffset, driveReadOffset + 2500);
+        if (!chunk) return 'You have reached the end of the document.';
+        await chrome.storage.local.set({ driveReadOffset: driveReadOffset + 2500 });
+        return `${chunk}${driveReadOffset + 2500 < text.length ? ' … say "continue reading" for more.' : ' End of document.'}`;
+      }
+
+      // ── List my docs ──────────────────────────────────────────────────────
+      if (
+        any(lower, 'list my docs', 'list my documents', 'show my docs', 'show my documents',
+                   'what docs', 'what documents', 'my docs', 'my documents', 'show docs',
+                   'list docs', 'recent docs', 'recent documents', 'recent files',
+                   'list my files', 'show my files', 'what files')
+      ) {
+        const docs = await listDocs(5);
+        if (!docs.length) return 'You have no recent Google Docs.';
+        await chrome.storage.local.set({ driveList: docs });
+        const list = docs.map((d, i) => `${i + 1}: ${d.name}`).join('. ');
+        return `You have ${docs.length} recent document${docs.length === 1 ? '' : 's'}. ${list}. Say "open doc 1" or "read doc 1" to use one.`;
+      }
+
+      // ── Search Drive / Docs ───────────────────────────────────────────────
+      {
+        const searchDocMatch = lower.match(
+          /(?:search|find|look for)\s+(?:my\s+)?(?:doc|docs|document|documents|drive|files?)\s+(?:for\s+|about\s+|called\s+|named\s+)?(.+)/
+        );
+        if (searchDocMatch) {
+          const query = searchDocMatch[1].trim();
+          if (query) {
+            const files = await searchAllFiles(query, 5);
+            if (!files.length) return `No files found matching "${query}" in your Drive.`;
+            await chrome.storage.local.set({ driveList: files });
+            const list = files.map((f, i) => `${i + 1}: ${f.name} (${mimeToType(f.mimeType)})`).join('. ');
+            return `Found ${files.length} file${files.length === 1 ? '' : 's'}. ${list}. Say "open file 1" or "read doc 1".`;
+          }
+        }
+      }
+
+      // ── Open doc by number from list ──────────────────────────────────────
+      {
+        const openNumMatch = lower.match(
+          /(?:open|go to|view|launch)\s+(?:doc|document|file|number|item)?\s*(?:number\s+)?(\d{1,2})/
+        );
+        if (openNumMatch && isDriveIntent) {
+          const num = parseInt(openNumMatch[1], 10);
+          const { driveList = [] } = await chrome.storage.local.get('driveList');
+          if (!driveList.length) return 'No document list loaded. Say "list my docs" first.';
+          if (num < 1 || num > driveList.length) return `I only have ${driveList.length} documents listed.`;
+          const file = driveList[num - 1];
+          const url  = fileUrl(file);
+          chrome.runtime.sendMessage({ type: 'NAVIGATE_TAB', url });
+          return `Opening ${file.name}.`;
+        }
+      }
+
+      // ── Read doc by number from list ──────────────────────────────────────
+      {
+        const readNumMatch = lower.match(
+          /(?:read|read out|summarize|summarise)\s+(?:doc|document|file|number|item)?\s*(?:number\s+)?(\d{1,2})/
+        );
+        if (readNumMatch && isDriveIntent) {
+          const num = parseInt(readNumMatch[1], 10);
+          const { driveList = [] } = await chrome.storage.local.get('driveList');
+          if (!driveList.length) return 'No document list loaded. Say "list my docs" first.';
+          if (num < 1 || num > driveList.length) return `I only have ${driveList.length} documents listed.`;
+          const file = driveList[num - 1];
+          const { text, title } = await getDocContent(file.id);
+          if (!text) return `${file.name} appears to be empty or could not be read.`;
+          await chrome.storage.local.set({ driveCurrentDocId: file.id, driveCurrentDocTitle: title, driveReadOffset: 0 });
+          const excerpt = text.slice(0, 2500);
+          return `Reading ${title}. ${excerpt}${text.length > 2500 ? ' … say "continue reading" for more.' : ''}`;
+        }
+      }
+
+      // ── Open / Read doc by name (AI fuzzy matching) ───────────────────────
+      {
+        const nameMatch = lower.match(
+          /(?:open|go to|view|launch|read|read out|find|show me|show|get)\s+(?:my\s+)?(?:doc|document|file|google doc)?\s*(?:called\s+|named\s+)?(.{3,60})$/
+        );
+        if (nameMatch) {
+          const rawName = nameMatch[1].trim();
+          const wantRead = any(lower, 'read', 'read out', 'summarize', 'summarise', 'tell me', 'what is in', "what's in");
+
+          // AI: figure out the best search query from the user's phrase
+          let searchQuery = rawName;
+          const aiName = await parseWithAI(
+            `The user wants to find a Google Drive file. They said: "${rawName}".\n` +
+            `Return JSON: {"query": "best search term for Drive file name"}`
+          );
+          if (aiName?.query) searchQuery = aiName.query;
+
+          const files = await searchAllFiles(searchQuery, 5);
+          if (!files.length) {
+            // Broaden: try each word
+            const words = searchQuery.split(' ').filter((w) => w.length > 3);
+            for (const w of words) {
+              const r = await searchAllFiles(w, 3);
+              if (r.length) { files.push(...r); break; }
+            }
+          }
+          if (!files.length) return `I could not find a file called "${rawName}" in your Drive.`;
+
+          const file = files[0];
+          await chrome.storage.local.set({ driveList: files, driveCurrentDocId: file.id });
+
+          if (wantRead) {
+            const { text, title } = await getDocContent(file.id);
+            if (!text) return `${file.name} appears to be empty.`;
+            await chrome.storage.local.set({ driveCurrentDocTitle: title, driveReadOffset: 0 });
+            const excerpt = text.slice(0, 2500);
+            return `Reading ${title}. ${excerpt}${text.length > 2500 ? ' … say "continue reading" for more.' : ''}`;
+          }
+
+          const url = fileUrl(file);
+          chrome.runtime.sendMessage({ type: 'NAVIGATE_TAB', url });
+          return `Opening ${file.name}.`;
+        }
+      }
+
+      // ── AI: Write a doc from scratch ─────────────────────────────────────
+      // Phrases: "write a doc about X", "create a doc about X and save it"
+      {
+        const writeMatch = lower.match(
+          /(?:write|create|make|draft|generate|compose)\s+(?:a\s+)?(?:new\s+)?(?:doc|document|google doc|article|essay|report|letter|story|note|blog post|blog|file)?\s*(?:about|on|for|titled|called|named)?\s+(.{3,})/
+        );
+        const hasAIWriteIntent = any(lower,
+          'write a doc', 'write a document', 'write a report', 'write an essay',
+          'write a letter', 'write a story', 'write a blog', 'write a note',
+          'draft a doc', 'draft a document', 'draft a letter', 'draft an email',
+          'create a doc about', 'create a document about', 'generate a doc',
+          'compose a document', 'write about', 'create about'
+        );
+        if (hasAIWriteIntent && writeMatch) {
+          const topic = writeMatch[1].trim();
+          // AI: extract style hint if any ("write a formal letter about X", "write a short report on Y")
+          const styleHints = lower.match(/(?:formal|informal|professional|casual|concise|detailed|short|long|simple|technical)\s+/);
+          const style = styleHints ? styleHints[0].trim() : undefined;
+
+          // Build a clean title from topic
+          const parsed = await parseWithAI(
+            `The user wants a Google Doc titled based on this topic: "${topic}".\n` +
+            `Return JSON: {"title": "Short, clear doc title (max 8 words)"}`
+          );
+          const docTitle = parsed?.title || topic.slice(0, 50);
+
+          const content = await generateDocContent({ topic, style, instructions: '' });
+          const { url } = await createDocWithContent(docTitle, content);
+          chrome.runtime.sendMessage({ type: 'NAVIGATE_TAB', url });
+          return `I've written a document titled "${docTitle}" and saved it to your Google Drive. Opening it now.`;
+        }
+      }
+
+      // ── AI: Append / add content to the current open doc ─────────────────
+      // Phrases: "add a conclusion", "add a section about X", "add a paragraph about X"
+      {
+        const appendMatch = lower.match(
+          /(?:add|append|insert|write)\s+(?:a\s+)?(?:paragraph|section|part|chapter|intro|introduction|conclusion|summary|note|sentence|bit|more|text)?\s*(?:about|on|for|covering|regarding|that covers)?\s+(.{3,})/
+        );
+        const hasAppendIntent = any(lower,
+          'add a paragraph', 'add a section', 'add an introduction', 'add an intro',
+          'add a conclusion', 'add a summary', 'add a note', 'append a section',
+          'append to my doc', 'insert a paragraph', 'add to my document',
+          'add more to my doc', 'add content', 'add text about', 'add a part about',
+          'write more about', 'include a section', 'include a paragraph'
+        );
+        if (hasAppendIntent && appendMatch) {
+          const appendInstructions = appendMatch[1].trim();
+          const { driveCurrentDocId, driveCurrentDocTitle } =
+            await chrome.storage.local.get(['driveCurrentDocId', 'driveCurrentDocTitle']);
+
+          // Also check if user is on a Google Doc tab
+          let docId = driveCurrentDocId;
+          let docTitle = driveCurrentDocTitle || 'your document';
+          if (!docId) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            docId = docIdFromUrl(tab?.url || '');
+            if (docId) docTitle = tab.title || 'this document';
+          }
+          if (!docId) return 'No document is currently open. Open a Google Doc tab or say "list my docs" first.';
+
+          const { text: existingContent } = await getDocContent(docId);
+          const newSection = await generateDocContent({ existingContent, appendInstructions });
+          await appendToDoc(docId, newSection);
+          return `Done — I've added the new section to "${docTitle}".`;
+        }
+      }
+
+      // ── AI: Edit / rewrite the current open doc ───────────────────────────
+      // Phrases: "make this doc more professional", "rewrite my doc", "edit this document to be shorter"
+      {
+        const hasEditIntent = any(lower,
+          'rewrite', 'edit my doc', 'edit this doc', 'edit this document', 'edit the document',
+          'make it more', 'make my doc', 'make this doc', 'make the doc',
+          'improve my doc', 'improve this doc', 'fix my doc', 'update my doc',
+          'change the tone', 'change my doc', 'rephrase', 'revise', 'polish',
+          'make it formal', 'make it informal', 'make it shorter', 'make it longer',
+          'make it professional', 'make it simpler', 'simplify my doc',
+          'make this more professional', 'make this more concise', 'make it cleaner'
+        );
+        const editInstructionMatch = lower.match(
+          /(?:rewrite|edit|improve|fix|update|change|make|revise|simplify|polish|rephrase)\s+(?:my\s+|this\s+|the\s+)?(?:doc|document|it|text)?\s*(?:to be|to|more|as|into|in a)?\s*(.{3,})?/
+        );
+        if (hasEditIntent) {
+          const editInstructions = editInstructionMatch?.[1]?.trim() || lower;
+          const { driveCurrentDocId, driveCurrentDocTitle } =
+            await chrome.storage.local.get(['driveCurrentDocId', 'driveCurrentDocTitle']);
+
+          let docId = driveCurrentDocId;
+          let docTitle = driveCurrentDocTitle || 'your document';
+          if (!docId) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            docId = docIdFromUrl(tab?.url || '');
+            if (docId) docTitle = tab.title || 'this document';
+          }
+          if (!docId) return 'No document is currently open. Open a Google Doc tab or say "list my docs" first.';
+
+          const { text: existingContent } = await getDocContent(docId);
+          if (!existingContent) return `"${docTitle}" appears to be empty. Nothing to edit.`;
+
+          const rewritten = await generateDocContent({ existingContent, editInstructions });
+          await writeToDoc(docId, rewritten);
+          return `Done — I've rewritten "${docTitle}" based on your instructions. The document has been updated.`;
+        }
+      }
+
+      // ── Create a new (empty) doc ──────────────────────────────────────────
+      {
+        const createMatch = lower.match(
+          /(?:create|make|new|start)\s+(?:a\s+)?(?:new\s+)?(?:doc|document|google doc|file)\s+(?:called|named|titled)\s+(.+)/
+        );
+        if (createMatch) {
+          const title = createMatch[1].trim();
+          const doc   = await createDoc(title);
+          const url   = `https://docs.google.com/document/d/${doc.documentId}/edit`;
+          chrome.runtime.sendMessage({ type: 'NAVIGATE_TAB', url });
+          return `Created a new document called "${doc.title}". Opening it now.`;
+        }
+        // Fallback: "create new doc" without a name
+        if (any(lower, 'create new doc', 'new document', 'new google doc', 'make a new doc', 'start a new doc')) {
+          const doc = await createDoc('Untitled Document');
+          const url = `https://docs.google.com/document/d/${doc.documentId}/edit`;
+          chrome.runtime.sendMessage({ type: 'NAVIGATE_TAB', url });
+          return `Created a new blank document. Opening it now.`;
+        }
+      }
+
+    } catch (err) {
+      const m = err.message ?? '';
+      if (m.includes('not granted') || m.includes('OAuth2') || m.includes('No auth') || m.includes('interaction')) {
+        return 'A Google sign-in window has opened. Please sign in — you will only need to do this once.';
+      }
+      return `Google Drive error: ${m}`;
+    }
+  }
+
+  // ── Google Calendar ────────────────────────────────────────────────────
+  // Understands natural dates, creates events from free-form speech using AI.
+
+  const isCalendarIntent = any(lower,
+    'calendar', 'schedule', 'event', 'appointment', 'meeting', 'reminder',
+    'today', 'tomorrow', 'this week', 'next week', 'what do i have',
+    'what have i got', "what's on", 'add event', 'add to calendar',
+    'create event', 'new event', 'book', 'set up a meeting', 'due date',
+    'what day', 'when is', 'am i free', 'free slot', 'next meeting',
+    'upcoming events', 'upcoming meeting', 'delete event', 'cancel event'
+  );
+
+  if (isCalendarIntent) {
+    try {
+
+      // ── Today's events ────────────────────────────────────────────────────
+      if (
+        any(lower, "what do i have today", "what's today", "today's schedule", "today's events",
+                   "what have i got today", "what's on today", "anything today",
+                   "today's calendar", "today's agenda", "am i busy today", "show today")
+      ) {
+        const events = await getEventsToday();
+        if (!events.length) return 'You have nothing scheduled for today.';
+        const list = formatEventList(events);
+        return `Today you have ${events.length} event${events.length === 1 ? '' : 's'}: ${list}.`;
+      }
+
+      // ── Tomorrow's events ─────────────────────────────────────────────────
+      if (
+        any(lower, "what do i have tomorrow", "tomorrow's schedule", "tomorrow's events",
+                   "what have i got tomorrow", "what's on tomorrow", "anything tomorrow",
+                   "tomorrow's calendar", "tomorrow's agenda", "show tomorrow")
+      ) {
+        const events = await getEventsTomorrow();
+        if (!events.length) return 'You have nothing scheduled for tomorrow.';
+        const list = formatEventList(events);
+        return `Tomorrow you have ${events.length} event${events.length === 1 ? '' : 's'}: ${list}.`;
+      }
+
+      // ── This week's events ────────────────────────────────────────────────
+      if (
+        any(lower, "this week", "week's schedule", "week's events", "schedule this week",
+                   "what's this week", "this week's calendar", "week ahead", "show this week")
+      ) {
+        const events = await getEventsThisWeek();
+        if (!events.length) return 'You have nothing scheduled this week.';
+        const list = formatEventList(events);
+        return `This week you have ${events.length} event${events.length === 1 ? '' : 's'}: ${list}.`;
+      }
+
+      // ── Next week ─────────────────────────────────────────────────────────
+      if (any(lower, 'next week', "next week's schedule", "next week's events", "show next week")) {
+        const events = await getEventsNextWeek();
+        if (!events.length) return 'You have nothing scheduled next week.';
+        const list = formatEventList(events);
+        return `Next week you have ${events.length} event${events.length === 1 ? '' : 's'}: ${list}.`;
+      }
+
+      // ── Next / upcoming event ─────────────────────────────────────────────
+      if (
+        any(lower, 'next event', 'next meeting', 'next appointment', 'upcoming event',
+                   'what is next', "what's next", 'upcoming meeting', 'upcoming appointment',
+                   'next reminder', 'what comes next', 'soon', 'what is coming up')
+      ) {
+        const events = await getUpcomingEvents(3);
+        if (!events.length) return 'You have no upcoming events in the next 30 days.';
+        const next = events[0];
+        const d = spokenDate(next.start);
+        const more = events.length > 1 ? ` After that: ${events.slice(1).map((e) => e.spoken).join(', ')}.` : '';
+        return `Your next event is: ${next.spoken} on ${d}.${more}`;
+      }
+
+      // ── Events on a specific date ─────────────────────────────────────────
+      {
+        const dateFromPhrase = quickDateParse(lower);
+        if (
+          dateFromPhrase &&
+          any(lower, "what do i have", "what's on", "anything on", "events on", "schedule on",
+                     "appointments on", "meetings on", "busy on", "free on")
+        ) {
+          const events = await getEventsForDate(dateFromPhrase);
+          const spoken  = spokenDate(dateFromPhrase);
+          if (!events.length) return `You have nothing scheduled on ${spoken}.`;
+          const list = formatEventList(events);
+          return `On ${spoken} you have ${events.length} event${events.length === 1 ? '' : 's'}: ${list}.`;
+        }
+      }
+
+      // ── Delete event ──────────────────────────────────────────────────────
+      if (
+        any(lower, 'delete event', 'cancel event', 'remove event', 'delete appointment',
+                   'cancel appointment', 'remove appointment', 'delete meeting', 'cancel meeting')
+      ) {
+        const { calEventList = [] } = await chrome.storage.local.get('calEventList');
+        const delNum = lower.match(/(\d{1,2})/);
+        if (calEventList.length && delNum) {
+          const idx = parseInt(delNum[1], 10) - 1;
+          if (idx >= 0 && idx < calEventList.length) {
+            const evt  = calEventList[idx];
+            const snap = [...calEventList];
+            pendingConfirmation = {
+              label: `delete "${evt.title}"`,
+              action: async () => {
+                await deleteEvent(evt.id);
+                await chrome.storage.local.set({ calEventList: snap.filter((_, i) => i !== idx) });
+                return `Deleted event: ${evt.title}.`;
+              },
+            };
+            return `Are you sure you want to delete "${evt.title}"? Say "yes" to confirm or "no" to cancel.`;
+          }
+        }
+        const events = await getUpcomingEvents(5);
+        if (!events.length) return 'No upcoming events found to delete.';
+        await chrome.storage.local.set({ calEventList: events });
+        const list = formatEventList(events);
+        return `Which event would you like to delete? ${list}. Say "delete event 1" or "cancel event 2".`;
+      }
+
+      // ── Create event — AI-powered parsing ────────────────────────────────
+      if (
+        any(lower, 'add event', 'create event', 'new event', 'add to calendar',
+                   'schedule', 'book', 'set up', 'add appointment', 'add meeting',
+                   'add reminder', 'remind me', 'create appointment', 'create meeting',
+                   'put on calendar', 'add to my calendar', 'block', 'plan')
+      ) {
+        const now    = new Date();
+        const today  = toISODate(now);
+        const timeNow = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+        // Try AI first for rich extraction
+        const parsed = await parseWithAI(
+          `Today is ${dateStr} at ${timeNow}.\n` +
+          `The user said: "${text}"\n\n` +
+          `Extract calendar event details. Return ONLY valid JSON:\n` +
+          `{\n` +
+          `  "title": "event title (string)",\n` +
+          `  "date": "YYYY-MM-DD (the event date)",\n` +
+          `  "startTime": "HH:MM (24h) or null if all-day",\n` +
+          `  "endTime": "HH:MM (24h) or null",\n` +
+          `  "durationHours": 1,\n` +
+          `  "allDay": false,\n` +
+          `  "location": "location string or null",\n` +
+          `  "description": "any notes or null"\n` +
+          `}`
+        );
+
+        let title    = parsed?.title       || text.replace(/(?:add|create|new|schedule|book)\s+(?:an?\s+)?(?:event|appointment|meeting|reminder)?\s*/i, '').trim() || 'New Event';
+        let date     = parsed?.date        || quickDateParse(lower) || today;
+        let allDay   = parsed?.allDay      ?? false;
+        let location = parsed?.location    || '';
+        let desc     = parsed?.description || '';
+
+        let startDateTime, endDateTime;
+        if (allDay) {
+          startDateTime = date;
+          endDateTime   = date;
+        } else {
+          const startTime = parsed?.startTime || '09:00';
+          const endTime   = parsed?.endTime   || null;
+          const durHours  = parsed?.durationHours ?? 1;
+
+          startDateTime = `${date}T${startTime}:00`;
+          endDateTime   = endTime
+            ? `${date}T${endTime}:00`
+            : addHours(startDateTime, durHours);
+        }
+
+        const created = await createEvent({ title, startDateTime, endDateTime, description: desc, location, allDay });
+        const when    = created.spoken || spokenEvent(title, startDateTime, endDateTime, allDay);
+        return `Event created: ${when} on ${spokenDate(date)}.${location ? ` Location: ${location}.` : ''} Say "open calendar" to view it in Google Calendar.`;
+      }
+
+      // ── Open Google Calendar ──────────────────────────────────────────────
+      if (
+        any(lower, 'open calendar', 'go to calendar', 'show calendar', 'open google calendar',
+                   'launch calendar', 'view calendar', 'take me to calendar')
+      ) {
+        chrome.runtime.sendMessage({ type: 'NAVIGATE_TAB', url: 'https://calendar.google.com/' });
+        return 'Opening Google Calendar.';
+      }
+
+      // ── AI fallback: any remaining calendar question ──────────────────────
+      if (isCalendarIntent) {
+        // Use AI to figure out what the user wants (e.g. "am I free Friday afternoon")
+        const parsedIntent = await parseWithAI(
+          `The user asked about their calendar: "${text}"\n` +
+          `Today is ${new Date().toLocaleDateString()}.\n` +
+          `Which of these intents best matches? Return JSON:\n` +
+          `{"intent": "today" | "tomorrow" | "this_week" | "specific_date" | "next_event" | "create" | "other", "date": "YYYY-MM-DD or null"}`
+        );
+
+        if (parsedIntent?.intent === 'today')      { const evs = await getEventsToday();    if (!evs.length) return 'Nothing today.';     return `Today: ${formatEventList(evs)}.`; }
+        if (parsedIntent?.intent === 'tomorrow')   { const evs = await getEventsTomorrow(); if (!evs.length) return 'Nothing tomorrow.';  return `Tomorrow: ${formatEventList(evs)}.`; }
+        if (parsedIntent?.intent === 'this_week')  { const evs = await getEventsThisWeek(); if (!evs.length) return 'Nothing this week.'; return `This week: ${formatEventList(evs)}.`; }
+        if (parsedIntent?.intent === 'next_event') { const nxt = await getNextEvent(); if (!nxt) return 'No upcoming events.'; return `Next: ${nxt.spoken} on ${spokenDate(nxt.start)}.`; }
+        if (parsedIntent?.intent === 'specific_date' && parsedIntent?.date) {
+          const events = await getEventsForDate(parsedIntent.date);
+          const spoken = spokenDate(parsedIntent.date);
+          if (!events.length) return `You have nothing scheduled on ${spoken}.`;
+          return `On ${spoken}: ${formatEventList(events)}.`;
+        }
+      }
+
+    } catch (err) {
+      const m = err.message ?? '';
+      if (m.includes('not granted') || m.includes('OAuth2') || m.includes('No auth') || m.includes('interaction')) {
+        return 'A Google sign-in window has opened. Please sign in — you only need to do this once.';
+      }
+      return `Calendar error: ${m}`;
+    }
   }
 
   // ── Page interaction: type / search / click ────────────────────────────

@@ -175,9 +175,48 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
       return true; // async
 
+    case 'CREATE_ALARM':
+      (async () => {
+        await chrome.alarms.create(message.name, { delayInMinutes: message.delayMinutes });
+        const { alarmMeta = {} } = await chrome.storage.local.get('alarmMeta');
+        alarmMeta[message.name] = { label: message.label, delayMinutes: message.delayMinutes };
+        await chrome.storage.local.set({ alarmMeta });
+        sendResponse({ ok: true });
+      })();
+      break;
+
+    case 'CANCEL_ALL_ALARMS':
+      (async () => {
+        const alarms = await chrome.alarms.getAll();
+        for (const a of alarms) await chrome.alarms.clear(a.name);
+        await chrome.storage.local.set({ alarmMeta: {} });
+        sendResponse({ ok: true, count: alarms.length });
+      })();
+      break;
+
+    case 'LIST_ALARMS':
+      (async () => {
+        const alarms = await chrome.alarms.getAll();
+        const { alarmMeta = {} } = await chrome.storage.local.get('alarmMeta');
+        sendResponse({ ok: true, alarms, meta: alarmMeta });
+      })();
+      break;
+
     default:
       sendResponse({ error: `Unknown message type: ${message.type}` });
   }
 
   return true;
+});
+
+// ─── Timer / alarm fire ────────────────────────────────────────────────────────
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  const { alarmMeta = {} } = await chrome.storage.local.get('alarmMeta');
+  const label = alarmMeta[alarm.name]?.label || 'timer';
+  chrome.tts.speak(`Time's up! Your ${label} is done.`, {
+    rate: 1.0, pitch: 1.1, volume: 1.0,
+  });
+  // Clean up
+  delete alarmMeta[alarm.name];
+  await chrome.storage.local.set({ alarmMeta });
 });
